@@ -1,0 +1,23 @@
+{
+  "app": "skate-dash",
+  "version": "1.0.1",
+  "platform": "windows",
+  "channel": "stable",
+  "total_size": 25,
+  "files": [
+    {
+      "path": "SkateDash/readme.txt",
+      "size": 25,
+      "sha256": "59670d1f22ca38ba2772eb9fffba1dd99c0df5cd1055cf9128712655aff8636b",
+      "chunks": [
+        {
+          "offset": 0,
+          "size": 25,
+          "sha256": "59670d1f22ca38ba2772eb9fffba1dd99c0df5cd1055cf9128712655aff8636b"
+        }
+      ]
+    }
+  ],
+  "chunk_base": "http://127.0.0.1:8000/storage/chunks/",
+  "signature": null
+}
