@@ -24,9 +24,18 @@ class UploadWorker(QObject):
         except Exception as e:
             self.finished.emit(False, str(e))
 
-def start_upload_thread(title: str, slug: str, version: str, platform: str, channel: str, folder: Path):
-    th = QThread()
-    w = UploadWorker(title, slug, version, platform, channel, folder)
-    w.moveToThread(th)
-    th.started.connect(w.run)
-    return th, w
+
+def start_upload_thread(
+    title: str,
+    slug: str,
+    version: str,
+    platform: str,
+    channel: str,
+    folder: Path,
+    parent: QObject | None = None,
+):
+    thread = QThread(parent)      # <— Parent setzen
+    worker = UploadWorker(title, slug, version, platform, channel, folder)
+    worker.moveToThread(thread)
+    thread.started.connect(worker.run)
+    return thread, worker

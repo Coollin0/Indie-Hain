@@ -38,6 +38,9 @@ class AdminPage(QWidget):
         self.refresh_btn.clicked.connect(self._load_users)
         self.stack.addWidget(self.content)
 
+        self.btn_requests = QPushButton("Game Anfragen")
+        self.btn_requests.clicked.connect(lambda: self.open_requests())
+
         self.refresh_gate()
         if store.has_role("admin"):
             self._load_users()
@@ -72,3 +75,9 @@ class AdminPage(QWidget):
             QMessageBox.information(self, "OK", f"Rolle aktualisiert: {updated.email} -> {updated.role}")
         except Exception as e:
             QMessageBox.critical(self, "Fehler", str(e))
+
+    def open_requests(self):
+        from pages.admin_requests_page import AdminRequestsPage
+        page = AdminRequestsPage()
+        self.parent().stack.addWidget(page)
+        self.parent().stack.setCurrentWidget(page)

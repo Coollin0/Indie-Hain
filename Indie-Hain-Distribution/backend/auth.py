@@ -1,19 +1,31 @@
 # backend/auth.py
-from fastapi import Header, HTTPException
-from typing import Optional
+from fastapi import Depends, Header, HTTPException
 
-async def require_user(
-    x_user_id: Optional[int] = Header(None),
-    x_role: Optional[str] = Header("user"),
+def get_user_from_headers(
+    x_user_id: str = Header(default="0"),
+    x_role: str = Header(default="user"),
 ):
-    if x_user_id is None:
-        raise HTTPException(401, "Unauthorized")
-    return {"user_id": int(x_user_id), "role": x_role}
+    try:
+        uid = int(x_user_id)
+    except ValueError:
+        uid = 0
+    return {"user_id": uid, "role": (x_role or "user").lower()}
 
-async def require_dev(
-    x_user_id: Optional[int] = Header(None),
-    x_role: Optional[str] = Header("user"),
-):
-    if x_user_id is None or x_role not in ("dev", "admin"):
+def require_user(user: dict = Depends(get_user_from_headers)):
+    if user["user_id"] <= 0:
+        raise HTTPException(401, "Authentication required")
+    return user
+
+def require_dev(user: dict = Depends(get_user_from_headers)):
+    if user["user_id"] <= 0:
+        raise HTTPException(401, "Authentication required")
+    if user["role"] not in ("dev", "admin"):
         raise HTTPException(403, "Developer role required")
-    return {"user_id": int(x_user_id), "role": x_role}
+    return user
+
+def require_admin(user: dict = Depends(get_user_from_headers)):
+    if user["user_id"] <= 0:
+        raise HTTPException(401, "Authentication required")
+    if user["role"] != "admin":
+        raise HTTPException(403, "Admin role required")
+    return user

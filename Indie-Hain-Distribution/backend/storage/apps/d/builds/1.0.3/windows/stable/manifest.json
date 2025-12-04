@@ -1,0 +1,47 @@
+{
+  "app": "d",
+  "version": "1.0.3",
+  "platform": "windows",
+  "channel": "stable",
+  "total_size": 9531,
+  "files": [
+    {
+      "path": ".DS_Store",
+      "size": 6148,
+      "sha256": "cd4f9e78e9957bc9cf4f7a5dd3164dbe207bc64cc4d9640bae77c4abce8c4ff3",
+      "chunks": [
+        {
+          "offset": 0,
+          "size": 6148,
+          "sha256": "cd4f9e78e9957bc9cf4f7a5dd3164dbe207bc64cc4d9640bae77c4abce8c4ff3"
+        }
+      ]
+    },
+    {
+      "path": "TestGame/readme.txt",
+      "size": 18,
+      "sha256": "82ec385c0ece59d6bcf033c005202374888c923fbaea12e6cefd288ad7c9db9a",
+      "chunks": [
+        {
+          "offset": 0,
+          "size": 18,
+          "sha256": "82ec385c0ece59d6bcf033c005202374888c923fbaea12e6cefd288ad7c9db9a"
+        }
+      ]
+    },
+    {
+      "path": "klick_spiel.py",
+      "size": 3365,
+      "sha256": "52ca912eb6300ed4ca8792a9d9e517e0f269a24280bbb935c0fa3a308f21f6be",
+      "chunks": [
+        {
+          "offset": 0,
+          "size": 3365,
+          "sha256": "52ca912eb6300ed4ca8792a9d9e517e0f269a24280bbb935c0fa3a308f21f6be"
+        }
+      ]
+    }
+  ],
+  "chunk_base": "apps/d/builds/1.0.3/windows/stable/chunks",
+  "signature": null
+}
