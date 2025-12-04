@@ -10,6 +10,9 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QScrollArea, QFrame, QSizePolicy
 )
+from services.env import abs_url
+from services.net_image import NetImage
+from shiboken6 import isValid as qt_is_valid
 
 class GameInfoPage(QWidget):
     """
@@ -90,28 +93,79 @@ class GameInfoPage(QWidget):
         self.back_btn.clicked.connect(self.back_requested.emit)
         self.cart_btn.clicked.connect(self._emit_add_to_cart)
 
+        self._img = NetImage(self)
+        self.cover_big = QLabel(alignment=Qt.AlignCenter)
+        self.cover_big.setMinimumHeight(240)
+
     # ---------- Public API ----------
     def set_game(self, game: Dict):
-        """Spiel setzen und UI füllen. game: {id, title, price, description?, cover_path?}"""
+        """Spiel setzen und UI füllen. game: {id, title, price, description?, cover_path?, cover_url?}"""
+        from shiboken6 import isValid as qt_is_valid
         self._game = game
-        self.title_lbl.setText(game.get("title", ""))
-        price = float(game.get("price", 0.0))
-        self.price_lbl.setText(f"Preis: {price:,.2f} €".replace(",", "X").replace(".", ",").replace("X", "."))
 
+        # --- Titel & Preis ---
+        title = game.get("title") or "Unbenannt"
+        self.title_lbl.setText(title)
+        price = float(game.get("price") or 0.0)
+        self.price_lbl.setText(
+            f"Preis: {price:,.2f} €".replace(",", "X").replace(".", ",").replace("X", ".")
+        )
+
+        # --- Beschreibung ---
         desc = game.get("description") or "Keine Beschreibung vorhanden."
-        self.desc_lbl.setText(desc)
+        fm = self.desc_lbl.fontMetrics()
+        elided = fm.elidedText(desc, Qt.ElideRight, self.desc_lbl.width() or 360)
+        self.desc_lbl.setText(elided)
 
-        cover = game.get("cover_path")
-        if cover:
-            pm = QPixmap(cover)
+        # --- Cover (lokal oder remote) ---
+        cover_path = game.get("cover_path") or ""
+        cover_url = game.get("cover_url") or ""
+
+        # Lokales Cover zuerst versuchen
+        pixmap_set = False
+        if cover_path:
+            pm = QPixmap(cover_path)
             if not pm.isNull():
-                self.cover_lbl.setPixmap(pm.scaled(self.cover_lbl.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation))
-            else:
-                self.cover_lbl.setText("Kein Cover")
-        else:
+                self.cover_lbl.setPixmap(
+                    pm.scaled(self.cover_lbl.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                )
+                pixmap_set = True
+
+        # Remote (falls vorhanden)
+        if cover_url and not pixmap_set:
+            url = abs_url(cover_url)
+            def _on_img(pm: QPixmap):
+                if not qt_is_valid(self.cover_lbl):
+                    return
+                if pm.isNull():
+                    self.cover_lbl.setText("Kein Cover")
+                else:
+                    self.cover_lbl.setPixmap(
+                        pm.scaled(self.cover_lbl.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                    )
+            self._img.load(url, _on_img, guard=self.cover_lbl)
+
+        if not cover_url and not cover_path:
             self.cover_lbl.setText("Kein Cover")
 
+        # --- Großes Cover (z. B. Header) ---
+        if cover_url:
+            url = abs_url(cover_url)
+            def _on_big(pm: QPixmap):
+                if not qt_is_valid(self.cover_big):
+                    return
+                if pm.isNull():
+                    self.cover_big.setText("Kein Cover")
+                else:
+                    scaled = pm.scaledToHeight(240, Qt.SmoothTransformation)
+                    self.cover_big.setPixmap(scaled)
+            self._img.load(url, _on_big, guard=self.cover_big)
+        else:
+            self.cover_big.setText("Kein Cover")
+
+        # --- Buttons aktualisieren ---
         self._sync_buttons()
+
 
     def set_cart_ids(self, ids: Set[int]):
         self._cart_ids = set(ids)
@@ -158,7 +212,7 @@ class GameInfoPage(QWidget):
         slug = game["slug"]  # sicherstellen, dass dein game dict den slug hat
         install_dir = Path("./Installed") / slug
 
-        self._install_thread, self._install_worker = start_install_thread(slug, install_dir)
+        self._install_thread, self._install_worker = start_install_thread(slug, install_dir, parent = self,)
         self._install_worker.progress.connect(self._on_install_progress)
         self._install_worker.finished.connect(self._on_install_finished)
 

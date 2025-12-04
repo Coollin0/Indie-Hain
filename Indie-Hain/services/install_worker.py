@@ -18,14 +18,15 @@ class InstallWorker(QObject):
     def run(self):
         try:
             man = get_manifest(self.slug, self.platform, self.channel)
-            install_from_manifest(man, self.install_dir)  # simple; 100% am Ende
+            install_from_manifest(man, self.install_dir)
             self.progress.emit(100)
             self.finished.emit(True, "Installiert")
         except Exception as e:
             self.finished.emit(False, str(e))
 
-def start_install_thread(slug: str, install_dir: Path):
-    thread = QThread()
+
+def start_install_thread(slug: str, install_dir: Path, parent: QObject | None = None):
+    thread = QThread(parent)      # <— Parent setzen
     worker = InstallWorker(slug, install_dir)
     worker.moveToThread(thread)
     thread.started.connect(worker.run)
