@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.pyc
+venv/
+.venv/
+
+# OS
+.DS_Store
+
+# Local state / runtime data
+Indie-Hain/data/*.db
+Indie-Hain/data/session.json
+Indie-Hain/Installed/
+
+# Distribution backend runtime artifacts
+Indie-Hain-Distribution/backend/indiehain.db
+Indie-Hain-Distribution/backend/storage/
+
+# Logs
+*.log
