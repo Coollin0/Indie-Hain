@@ -3,7 +3,9 @@ from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import requests, json, os, hashlib
 
-API = "http://127.0.0.1:8000"  # Distribution-Backend (FastAPI)
+from services.env import api_base
+
+API = api_base()  # Distribution-Backend (FastAPI)
 SESSION_PATH = os.path.join("data", "session.json")
 
 def _headers(role="user"):
