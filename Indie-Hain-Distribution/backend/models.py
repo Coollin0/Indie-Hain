@@ -2,6 +2,26 @@ from pydantic import BaseModel, Field
 from typing import List, Literal, Optional
 
 
+class AuthRegister(BaseModel):
+    email: str
+    password: str
+    username: str
+
+
+class AuthLogin(BaseModel):
+    email: str
+    password: str
+
+
+class AuthProfileUpdate(BaseModel):
+    username: Optional[str] = None
+
+
+class AuthBootstrap(BaseModel):
+    email: str
+    secret: str
+
+
 class AppCreate(BaseModel):
     slug: str
     title: str

@@ -9,14 +9,18 @@ CHUNK_SIZE = 8 * 1024 * 1024  # 8 MB
 
 def _headers(role="dev") -> Dict[str, str]:
     uid, r = 0, role
+    token = None
     try:
         with open(SESSION_PATH, "r", encoding="utf-8") as f:
             s = json.load(f)
         uid = s.get("user_id") or s.get("id") or 0
         r = (s.get("role") or role).lower()
+        token = s.get("token")
     except FileNotFoundError:
         pass
     h = {"X-User-Id": str(uid or 0), "X-Role": r}
+    if token:
+        h["Authorization"] = f"Bearer {token}"
     print(f"[uploader headers] {h}  session={SESSION_PATH}")  # Debug
     return h
 

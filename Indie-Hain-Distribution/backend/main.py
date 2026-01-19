@@ -7,7 +7,17 @@ from pathlib import Path
 from datetime import datetime
 import hashlib, json, io, zipfile, tempfile, os
 
-from .auth import require_dev, require_user, require_admin
+from .auth import (
+    require_dev,
+    require_user,
+    require_admin,
+    authenticate,
+    create_user,
+    issue_token,
+    update_username,
+    set_role_by_email,
+    set_role_by_id,
+)
 from .db import get_db, STORAGE_CHUNKS, STORAGE_APPS, ensure_schema
 from .models import (
     AppCreate,
@@ -16,6 +26,10 @@ from .models import (
     Manifest,
     AppMetaUpdate,
     PurchaseReport,
+    AuthRegister,
+    AuthLogin,
+    AuthProfileUpdate,
+    AuthBootstrap,
 )
 from pathlib import Path as _Path
 
@@ -35,6 +49,70 @@ app.mount(
 # Router für Admin & Public APIs
 admin = APIRouter(prefix="/api/admin", tags=["admin"])
 public = APIRouter(prefix="/api/public", tags=["public"])
+
+
+# ===============================
+# Auth API
+# ===============================
+
+@app.post("/api/auth/register")
+def auth_register(payload: AuthRegister):
+    user = create_user(payload.email, payload.password, payload.username)
+    token = issue_token(user["id"])
+    return {
+        "token": token,
+        "user": user,
+    }
+
+
+@app.post("/api/auth/login")
+def auth_login(payload: AuthLogin):
+    user = authenticate(payload.email, payload.password)
+    if not user:
+        raise HTTPException(401, "Invalid credentials")
+    token = issue_token(user["id"])
+    return {
+        "token": token,
+        "user": user,
+    }
+
+
+@app.get("/api/auth/me")
+def auth_me(user: dict = Depends(require_user)):
+    return {"user": {
+        "id": int(user["user_id"]),
+        "email": user.get("email", ""),
+        "role": user.get("role", "user"),
+        "username": user.get("username", ""),
+    }}
+
+
+@app.post("/api/auth/profile")
+def auth_profile(payload: AuthProfileUpdate, user: dict = Depends(require_user)):
+    if payload.username is None:
+        return {"user": {
+            "id": int(user["user_id"]),
+            "email": user.get("email", ""),
+            "role": user.get("role", "user"),
+            "username": user.get("username", ""),
+        }}
+    updated = update_username(user["user_id"], payload.username)
+    return {"user": updated}
+
+
+@app.post("/api/auth/upgrade/dev")
+def auth_upgrade_dev(user: dict = Depends(require_user)):
+    updated = set_role_by_id(user["user_id"], "dev")
+    return {"user": updated}
+
+
+@app.post("/api/auth/bootstrap-admin")
+def auth_bootstrap_admin(payload: AuthBootstrap):
+    secret = os.environ.get("ADMIN_BOOTSTRAP_SECRET", "")
+    if not secret or payload.secret != secret:
+        raise HTTPException(403, "Bootstrap disabled or invalid secret")
+    user = set_role_by_email(payload.email, "admin")
+    return {"user": user}
 
 
 # ===============================

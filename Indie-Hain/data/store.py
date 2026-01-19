@@ -463,7 +463,11 @@ def save_session(user=None):
     """
     # existierende Persistierung unverändert lassen:
     if is_logged_in() and getattr(session.current_user, "id", None) is not None:
-        SESSION_PATH.write_text(json.dumps({"user_id": int(session.current_user.id)}))
+        token = getattr(session.current_user, "token", None)
+        SESSION_PATH.write_text(json.dumps({
+            "user_id": int(session.current_user.id),
+            "token": token,
+        }))
     else:
         clear_session()
         return
@@ -475,13 +479,15 @@ def save_session(user=None):
     if isinstance(user, dict):
         uid = int(user.get("id") or user.get("user_id") or 0)
         role = (user.get("role") or "user").lower()
+        token = user.get("token")
     else:
         uid = int(getattr(user, "id", 0) or 0)
         role = (getattr(user, "role", "user") or "user").lower()
+        token = getattr(user, "token", None)
 
     SESSION_JSON_PATH.parent.mkdir(parents=True, exist_ok=True)
     with open(SESSION_JSON_PATH, "w", encoding="utf-8") as f:
-        json.dump({"user_id": uid, "role": role}, f, indent=2)
+        json.dump({"user_id": uid, "role": role, "token": token}, f, indent=2)
 
 def safe_session(user):
     return save_session(user)
@@ -491,8 +497,9 @@ def sync_uploader_session_from_current():
     SESSION_JSON_PATH.parent.mkdir(parents=True, exist_ok=True)
     uid = int(getattr(u, "id", 0) or 0)
     role = (getattr(u, "role", "user") or "user").lower()
+    token = getattr(u, "token", None)
     with open(SESSION_JSON_PATH, "w", encoding="utf-8") as f:
-        json.dump({"user_id": uid, "role": role}, f, indent=2)
+        json.dump({"user_id": uid, "role": role, "token": token}, f, indent=2)
 
 def clear_session():
     try:
@@ -509,8 +516,11 @@ def load_session() -> bool:
         return False
     try:
         data = json.loads(SESSION_PATH.read_text())
-        uid = int(data.get("user_id"))
-        u = auth_service.get_user_by_id(uid)
+        token = data.get("token")
+        if not token:
+            raise RuntimeError("missing token")
+        auth_service.set_token(token)
+        u = auth_service.me(token)
         if u:
             session.current_user = u
             return True

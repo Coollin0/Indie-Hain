@@ -10,12 +10,18 @@ SESSION_PATH = os.path.join("data", "session.json")
 
 def _headers(role="user"):
     user_id = 0
+    token = None
     try:
         with open(SESSION_PATH, "r", encoding="utf-8") as f:
-            user_id = json.load(f).get("user_id", 0)
+            data = json.load(f)
+            user_id = data.get("user_id", 0)
+            token = data.get("token")
     except FileNotFoundError:
         pass
-    return {"X-User-Id": str(user_id or 0), "X-Role": role}
+    headers = {"X-User-Id": str(user_id or 0), "X-Role": role}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    return headers
 
 def get_manifest(slug: str, platform: str = "windows", channel: str = "stable") -> dict:
     r = requests.get(f"{API}/api/manifest/{slug}/{platform}/{channel}", headers=_headers("user"))
