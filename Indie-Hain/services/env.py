@@ -1,11 +1,12 @@
 import os
 import json
+import sys
 from pathlib import Path
 
 DEFAULT_API = "http://127.0.0.1:8000"
 
 def _settings_api() -> str | None:
-    for candidate in (Path.cwd() / "indie-hain.json", Path.cwd() / "settings.json"):
+    for candidate in _settings_paths():
         if candidate.exists():
             try:
                 data = json.loads(candidate.read_text(encoding="utf-8"))
@@ -16,6 +17,27 @@ def _settings_api() -> str | None:
                 if isinstance(val, str) and val.strip():
                     return val
     return None
+
+def _settings_paths() -> list[Path]:
+    candidates: list[Path] = [
+        Path.cwd() / "indie-hain.json",
+        Path.cwd() / "settings.json",
+    ]
+    exe = Path(sys.executable).resolve()
+    candidates.extend([
+        exe.parent / "indie-hain.json",
+        exe.parent / "settings.json",
+    ])
+    for parent in exe.parents:
+        if parent.suffix == ".app":
+            candidates.extend([
+                parent.parent / "indie-hain.json",
+                parent.parent / "settings.json",
+                parent / "Contents" / "Resources" / "indie-hain.json",
+                parent / "Contents" / "Resources" / "settings.json",
+            ])
+            break
+    return candidates
 
 def api_base() -> str:
     env_val = os.environ.get("DIST_API")

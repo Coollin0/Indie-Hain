@@ -18,3 +18,9 @@ Indie-Hain-Distribution/backend/storage/
 
 # Logs
 *.log
+
+# PyInstaller
+Indie-Hain/build/
+Indie-Hain/dist/
+Indie-Hain/.pyinstaller/
+Indie-Hain/*.spec
