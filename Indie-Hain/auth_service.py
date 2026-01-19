@@ -31,14 +31,30 @@ class AuthService:
         return {"Authorization": f"Bearer {self._token}"}
 
     def _user_from_payload(self, payload: dict, token: Optional[str]) -> User:
+        avatar_url = payload.get("avatar_url") or payload.get("avatar_path") or None
         return User(
             id=int(payload.get("id", 0)),
             email=payload.get("email", ""),
             role=(payload.get("role") or "user").lower(),
             username=payload.get("username") or "",
-            avatar_path=None,
+            avatar_path=avatar_url,
             token=token,
         )
+
+    def _upload_avatar(self, avatar_src_path: str) -> User | None:
+        if not self._token:
+            return None
+        with open(avatar_src_path, "rb") as f:
+            files = {"file": f}
+            r = requests.post(
+                f"{self.base_url}/api/auth/avatar",
+                headers=self._auth_headers(),
+                files=files,
+                timeout=30,
+            )
+        r.raise_for_status()
+        data = r.json()
+        return self._user_from_payload(data.get("user", {}), self._token)
 
     def register(self, email: str, password: str, username: str, avatar_src_path: Optional[str] = None) -> User:
         r = requests.post(
@@ -50,7 +66,12 @@ class AuthService:
         data = r.json()
         token = data.get("token")
         self._token = token
-        return self._user_from_payload(data.get("user", {}), token)
+        user = self._user_from_payload(data.get("user", {}), token)
+        if avatar_src_path:
+            updated = self._upload_avatar(avatar_src_path)
+            if updated:
+                user = updated
+        return user
 
     def login(self, email: str, password: str) -> Optional[User]:
         r = requests.post(
@@ -90,7 +111,12 @@ class AuthService:
         )
         r.raise_for_status()
         data = r.json()
-        return self._user_from_payload(data.get("user", {}), self._token)
+        user = self._user_from_payload(data.get("user", {}), self._token)
+        if avatar_src_path:
+            updated = self._upload_avatar(avatar_src_path)
+            if updated:
+                user = updated
+        return user
 
     def upgrade_to_dev(self, user_id: int) -> User:
         if not self._token:
@@ -106,3 +132,29 @@ class AuthService:
 
     def get_user_by_id(self, user_id: int) -> Optional[User]:
         return None
+
+    def list_users(self) -> list[User]:
+        if not self._token:
+            raise RuntimeError("Not authenticated")
+        r = requests.get(
+            f"{self.base_url}/api/admin/users",
+            headers=self._auth_headers(),
+            timeout=20,
+        )
+        r.raise_for_status()
+        data = r.json()
+        items = data.get("items") or []
+        return [self._user_from_payload(item, self._token) for item in items]
+
+    def set_role(self, user_id: int, role: str) -> User:
+        if not self._token:
+            raise RuntimeError("Not authenticated")
+        r = requests.post(
+            f"{self.base_url}/api/admin/users/{int(user_id)}/role",
+            headers=self._auth_headers(),
+            json={"role": role},
+            timeout=20,
+        )
+        r.raise_for_status()
+        data = r.json()
+        return self._user_from_payload(data.get("user", {}), self._token)

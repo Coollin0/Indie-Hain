@@ -17,6 +17,7 @@ from .auth import (
     update_username,
     set_role_by_email,
     set_role_by_id,
+    update_avatar_url,
 )
 from .db import get_db, STORAGE_CHUNKS, STORAGE_APPS, ensure_schema
 from .models import (
@@ -30,6 +31,7 @@ from .models import (
     AuthLogin,
     AuthProfileUpdate,
     AuthBootstrap,
+    AdminRoleUpdate,
 )
 from pathlib import Path as _Path
 
@@ -84,6 +86,7 @@ def auth_me(user: dict = Depends(require_user)):
         "email": user.get("email", ""),
         "role": user.get("role", "user"),
         "username": user.get("username", ""),
+        "avatar_url": user.get("avatar_url", ""),
     }}
 
 
@@ -95,6 +98,7 @@ def auth_profile(payload: AuthProfileUpdate, user: dict = Depends(require_user))
             "email": user.get("email", ""),
             "role": user.get("role", "user"),
             "username": user.get("username", ""),
+            "avatar_url": user.get("avatar_url", ""),
         }}
     updated = update_username(user["user_id"], payload.username)
     return {"user": updated}
@@ -106,6 +110,24 @@ def auth_upgrade_dev(user: dict = Depends(require_user)):
     return {"user": updated}
 
 
+@app.post("/api/auth/avatar")
+async def auth_avatar(
+    file: UploadFile = File(...),
+    user: dict = Depends(require_user),
+):
+    static_dir = Path(__file__).resolve().parent / "static" / "avatars"
+    static_dir.mkdir(parents=True, exist_ok=True)
+    ext = Path(file.filename).suffix or ".png"
+    if ext.lower() not in (".png", ".jpg", ".jpeg", ".webp", ".bmp"):
+        ext = ".png"
+    dst = static_dir / f"{int(user['user_id'])}{ext}"
+    with dst.open("wb") as out:
+        out.write(await file.read())
+    avatar_url = f"/static/avatars/{dst.name}"
+    updated = update_avatar_url(user["user_id"], avatar_url)
+    return {"user": updated}
+
+
 @app.post("/api/auth/bootstrap-admin")
 def auth_bootstrap_admin(payload: AuthBootstrap):
     secret = os.environ.get("ADMIN_BOOTSTRAP_SECRET", "")
@@ -113,6 +135,34 @@ def auth_bootstrap_admin(payload: AuthBootstrap):
         raise HTTPException(403, "Bootstrap disabled or invalid secret")
     user = set_role_by_email(payload.email, "admin")
     return {"user": user}
+
+
+@admin.get("/users")
+def admin_list_users(user=Depends(require_admin)):
+    with get_db() as db:
+        rows = db.execute(
+            "SELECT id, email, role, username, avatar_url, created_at FROM users ORDER BY created_at DESC"
+        ).fetchall()
+    items = []
+    for r in rows:
+        items.append({
+            "id": int(r["id"]),
+            "email": r["email"],
+            "role": (r["role"] or "user").lower(),
+            "username": r["username"] or "",
+            "avatar_url": r["avatar_url"] or "",
+            "created_at": r["created_at"],
+        })
+    return {"items": items}
+
+
+@admin.post("/users/{user_id}/role")
+def admin_set_role(user_id: int, payload: AdminRoleUpdate, user=Depends(require_admin)):
+    role = (payload.role or "user").lower()
+    if role not in ("user", "dev", "admin"):
+        raise HTTPException(400, "invalid role")
+    updated = set_role_by_id(user_id, role)
+    return {"user": updated}
 
 
 # ===============================

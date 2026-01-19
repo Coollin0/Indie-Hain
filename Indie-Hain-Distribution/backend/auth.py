@@ -43,7 +43,7 @@ def _user_by_token(token: str) -> dict | None:
     with get_db() as db:
         row = db.execute(
             """
-            SELECT u.id, u.email, u.role, u.username
+            SELECT u.id, u.email, u.role, u.username, u.avatar_url
             FROM sessions s
             JOIN users u ON u.id = s.user_id
             WHERE s.token = ?
@@ -57,13 +57,14 @@ def _user_by_token(token: str) -> dict | None:
         "email": row["email"],
         "role": (row["role"] or "user").lower(),
         "username": row["username"] or "",
+        "avatar_url": row["avatar_url"] or "",
     }
 
 
 def _user_by_email(email: str) -> dict | None:
     with get_db() as db:
         row = db.execute(
-            "SELECT id, email, role, username, password_hash FROM users WHERE email = ?",
+            "SELECT id, email, role, username, avatar_url, password_hash FROM users WHERE email = ?",
             (email,),
         ).fetchone()
     if not row:
@@ -73,6 +74,7 @@ def _user_by_email(email: str) -> dict | None:
         "email": row["email"],
         "role": (row["role"] or "user").lower(),
         "username": row["username"] or "",
+        "avatar_url": row["avatar_url"] or "",
         "password_hash": row["password_hash"],
     }
 
@@ -99,7 +101,7 @@ def create_user(email: str, password: str, username: str) -> dict:
                 raise HTTPException(409, "email already exists") from exc
             raise
         row = db.execute(
-            "SELECT id, email, role, username FROM users WHERE email = ?",
+            "SELECT id, email, role, username, avatar_url FROM users WHERE email = ?",
             (email,),
         ).fetchone()
     return {
@@ -107,6 +109,7 @@ def create_user(email: str, password: str, username: str) -> dict:
         "email": row["email"],
         "role": (row["role"] or "user").lower(),
         "username": row["username"] or "",
+        "avatar_url": row["avatar_url"] or "",
     }
 
 
@@ -121,6 +124,7 @@ def authenticate(email: str, password: str) -> dict | None:
             "email": user["email"],
             "role": user["role"],
             "username": user["username"],
+            "avatar_url": user["avatar_url"],
         }
     return None
 
@@ -140,7 +144,7 @@ def update_username(user_id: int, username: str) -> dict:
         )
         db.commit()
         row = db.execute(
-            "SELECT id, email, role, username FROM users WHERE id = ?",
+            "SELECT id, email, role, username, avatar_url FROM users WHERE id = ?",
             (int(user_id),),
         ).fetchone()
     if not row:
@@ -150,6 +154,7 @@ def update_username(user_id: int, username: str) -> dict:
         "email": row["email"],
         "role": (row["role"] or "user").lower(),
         "username": row["username"] or "",
+        "avatar_url": row["avatar_url"] or "",
     }
 
 
@@ -159,7 +164,7 @@ def set_role_by_email(email: str, role: str) -> dict:
         db.execute("UPDATE users SET role = ? WHERE email = ?", (role, email))
         db.commit()
         row = db.execute(
-            "SELECT id, email, role, username FROM users WHERE email = ?",
+            "SELECT id, email, role, username, avatar_url FROM users WHERE email = ?",
             (email,),
         ).fetchone()
     if not row:
@@ -169,6 +174,7 @@ def set_role_by_email(email: str, role: str) -> dict:
         "email": row["email"],
         "role": (row["role"] or "user").lower(),
         "username": row["username"] or "",
+        "avatar_url": row["avatar_url"] or "",
     }
 
 
@@ -177,7 +183,7 @@ def set_role_by_id(user_id: int, role: str) -> dict:
         db.execute("UPDATE users SET role = ? WHERE id = ?", (role, int(user_id)))
         db.commit()
         row = db.execute(
-            "SELECT id, email, role, username FROM users WHERE id = ?",
+            "SELECT id, email, role, username, avatar_url FROM users WHERE id = ?",
             (int(user_id),),
         ).fetchone()
     if not row:
@@ -187,6 +193,29 @@ def set_role_by_id(user_id: int, role: str) -> dict:
         "email": row["email"],
         "role": (row["role"] or "user").lower(),
         "username": row["username"] or "",
+        "avatar_url": row["avatar_url"] or "",
+    }
+
+
+def update_avatar_url(user_id: int, avatar_url: str) -> dict:
+    with get_db() as db:
+        db.execute(
+            "UPDATE users SET avatar_url = ? WHERE id = ?",
+            (avatar_url, int(user_id)),
+        )
+        db.commit()
+        row = db.execute(
+            "SELECT id, email, role, username, avatar_url FROM users WHERE id = ?",
+            (int(user_id),),
+        ).fetchone()
+    if not row:
+        raise HTTPException(404, "user not found")
+    return {
+        "id": int(row["id"]),
+        "email": row["email"],
+        "role": (row["role"] or "user").lower(),
+        "username": row["username"] or "",
+        "avatar_url": row["avatar_url"] or "",
     }
 
 

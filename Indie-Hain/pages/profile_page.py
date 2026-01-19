@@ -6,6 +6,8 @@ from PySide6.QtCore import Signal, Qt
 from PySide6.QtGui import QPixmap
 from pathlib import Path
 from data import store
+from services.net_image import NetImage
+from services.env import abs_url
 
 
 class ProfilePage(QWidget):
@@ -17,6 +19,7 @@ class ProfilePage(QWidget):
     def __init__(self):
         super().__init__()
         self._avatar_src: str | None = None
+        self._net_image = NetImage(self)
         self._build_ui()          # <-- WICHTIG: UI jetzt wirklich aufbauen
         self.refresh_gate()
         self._sync_state()
@@ -119,11 +122,21 @@ class ProfilePage(QWidget):
 
     def _load_preview_from_current_user(self):
         u = store.session.current_user
-        if u and u.avatar_path and Path(u.avatar_path).exists():
-            pm = QPixmap(u.avatar_path)
-            if not pm.isNull():
-                self.avatar_preview.setPixmap(pm.scaled(self.avatar_preview.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation))
+        if u and u.avatar_path:
+            if u.avatar_path.startswith("http") or u.avatar_path.startswith("/"):
+                url = abs_url(u.avatar_path)
+                def _on_ready(pm: QPixmap):
+                    if not pm.isNull():
+                        self.avatar_preview.setPixmap(pm.scaled(self.avatar_preview.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation))
+                    else:
+                        self.avatar_preview.setText("Kein Bild")
+                self._net_image.load(url, _on_ready, guard=self)
                 return
+            if Path(u.avatar_path).exists():
+                pm = QPixmap(u.avatar_path)
+                if not pm.isNull():
+                    self.avatar_preview.setPixmap(pm.scaled(self.avatar_preview.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation))
+                    return
         self.avatar_preview.setText("Kein Bild")
 
     def _clear_form(self):
@@ -144,6 +157,7 @@ class ProfilePage(QWidget):
             self.btn_upgrade.setEnabled(role == "user")
             self.btn_save.setEnabled(True)
             self._clear_form()
+            self._load_preview_from_current_user()
         else:
             self.status_lbl.setText("Nicht eingeloggt.")
             self.btn_logout.setEnabled(False)

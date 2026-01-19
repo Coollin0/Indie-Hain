@@ -41,6 +41,7 @@ def ensure_schema():
                 password_hash TEXT NOT NULL,
                 role TEXT NOT NULL DEFAULT 'user',
                 username TEXT,
+                avatar_url TEXT,
                 created_at TEXT
             )
             """
@@ -55,6 +56,16 @@ def ensure_schema():
             )
             """
         )
+
+        user_cols = [r[1] for r in db.execute("PRAGMA table_info(users)").fetchall()]
+        if "username" not in user_cols:
+            db.execute("ALTER TABLE users ADD COLUMN username TEXT")
+        if "avatar_url" not in user_cols:
+            db.execute("ALTER TABLE users ADD COLUMN avatar_url TEXT")
+        if "role" not in user_cols:
+            db.execute("ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'user'")
+        if "created_at" not in user_cols:
+            db.execute("ALTER TABLE users ADD COLUMN created_at TEXT")
 
         db.execute(
             """

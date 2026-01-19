@@ -22,6 +22,10 @@ class AuthBootstrap(BaseModel):
     secret: str
 
 
+class AdminRoleUpdate(BaseModel):
+    role: str
+
+
 class AppCreate(BaseModel):
     slug: str
     title: str

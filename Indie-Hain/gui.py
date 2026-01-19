@@ -25,6 +25,8 @@ from pages.dev_games_page import DevGamesPage
 from services.install_worker import start_install_thread
 from services import shop_api
 from services import dev_api   # NEU
+from services.net_image import NetImage
+from services.env import abs_url
 from data import store
 
 
@@ -70,6 +72,7 @@ class ProfileChip(QWidget):
         self.name = QLabel("Profile"); self.name.setStyleSheet("color: #e8e8e8; font-size: 16px;")
         lay.addWidget(self.avatar); lay.addWidget(self.name)
         self.setCursor(Qt.PointingHandCursor)
+        self._net_image = NetImage(self)
     def mouseReleaseEvent(self, e): self.clicked.emit()
     def _circle_pixmap(self, pm: QPixmap, size: QSize) -> QPixmap:
         s = min(size.width(), size.height())
@@ -82,9 +85,22 @@ class ProfileChip(QWidget):
         return out
     def set_user(self, username: str, avatar_path: str | None):
         self.name.setText(username or "Profile")
-        if avatar_path and Path(avatar_path).exists():
-            pm = QPixmap(avatar_path); circ = self._circle_pixmap(pm, self.avatar.size())
-            if not circ.isNull(): self.avatar.setText(""); self.avatar.setPixmap(circ); return
+        if avatar_path:
+            if avatar_path.startswith("http") or avatar_path.startswith("/"):
+                url = abs_url(avatar_path)
+                def _on_ready(pm: QPixmap):
+                    circ = self._circle_pixmap(pm, self.avatar.size())
+                    if not circ.isNull():
+                        self.avatar.setText("")
+                        self.avatar.setPixmap(circ)
+                    else:
+                        self.avatar.setPixmap(QPixmap())
+                        self.avatar.setText("👤")
+                self._net_image.load(url, _on_ready, guard=self)
+                return
+            if Path(avatar_path).exists():
+                pm = QPixmap(avatar_path); circ = self._circle_pixmap(pm, self.avatar.size())
+                if not circ.isNull(): self.avatar.setText(""); self.avatar.setPixmap(circ); return
         self.avatar.setPixmap(QPixmap()); self.avatar.setText("👤")
 
 
