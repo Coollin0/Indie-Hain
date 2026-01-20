@@ -196,6 +196,7 @@ def set_role_by_email(email: str, role: str) -> dict:
 def set_role_by_id(user_id: int, role: str) -> dict:
     with get_db() as db:
         db.execute("UPDATE users SET role = ? WHERE id = ?", (role, int(user_id)))
+        db.execute("DELETE FROM sessions WHERE user_id = ?", (int(user_id),))
         db.commit()
         row = db.execute(
             "SELECT id, email, role, username, avatar_url FROM users WHERE id = ?",

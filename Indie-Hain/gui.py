@@ -185,6 +185,7 @@ class Main(QMainWindow):
             self.library_page.uninstall_requested.connect(self._on_uninstall_requested)
         self._install_thread = None
         self._install_worker = None
+        self._install_focus_refresh()
 
         # GameInfoPage in den Stack (ohne Toolbar-Button)
         self.stack.addWidget(self.game_info_page)
@@ -515,6 +516,7 @@ class Main(QMainWindow):
         if hasattr(self.shop_page, "set_cart_ids"):
             self.shop_page.set_cart_ids(self.cart_ids)
         self.game_info_page.set_cart_ids(self.cart_ids)
+        self._refresh_session_from_server()
 
 
     def _sync_profile_chip(self):
@@ -543,6 +545,38 @@ class Main(QMainWindow):
                 # falls gerade DevGames angezeigt werden, zurück zum Shop
                 if self.stack.currentWidget() is self.dev_games_page:
                     self.show_page("Shop")
+
+    def _install_focus_refresh(self):
+        app = QApplication.instance()
+        if not app:
+            return
+        app.applicationStateChanged.connect(self._on_app_state_changed)
+
+    def _on_app_state_changed(self, state: Qt.ApplicationState):
+        if state == Qt.ApplicationState.ApplicationActive:
+            self._refresh_session_from_server()
+
+    def _refresh_session_from_server(self):
+        if not store.is_logged_in() or not store.auth_service:
+            return
+        token = getattr(store.session.current_user, "token", None)
+        if not token:
+            return
+        refreshed = store.auth_service.me(token)
+        if refreshed:
+            store.session.current_user = refreshed
+            store.save_session()
+            self._sync_profile_chip()
+            self.profile_page.refresh()
+            self._sync_admin_tab_visibility()
+            self._sync_dev_tab_visibility()
+        else:
+            store.session.current_user = None
+            store.clear_session()
+            self._sync_profile_chip()
+            self.profile_page.refresh()
+            self._sync_admin_tab_visibility()
+            self._sync_dev_tab_visibility()
 
 
     # ----- Warenkorb-Logik -----

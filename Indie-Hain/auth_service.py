@@ -95,6 +95,7 @@ class AuthService:
             timeout=20,
         )
         if r.status_code in (401, 403):
+            self._token = None
             return None
         r.raise_for_status()
         data = r.json()
