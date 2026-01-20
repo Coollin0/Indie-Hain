@@ -52,10 +52,15 @@ def ensure_schema():
             CREATE TABLE IF NOT EXISTS sessions (
                 token TEXT PRIMARY KEY,
                 user_id INTEGER NOT NULL,
-                created_at TEXT
+                created_at TEXT,
+                expires_at TEXT
             )
             """
         )
+
+        session_cols = [r[1] for r in db.execute("PRAGMA table_info(sessions)").fetchall()]
+        if "expires_at" not in session_cols:
+            db.execute("ALTER TABLE sessions ADD COLUMN expires_at TEXT")
 
         user_cols = [r[1] for r in db.execute("PRAGMA table_info(users)").fetchall()]
         if "username" not in user_cols:

@@ -18,6 +18,7 @@ from .auth import (
     set_role_by_email,
     set_role_by_id,
     update_avatar_url,
+    revoke_token,
 )
 from .db import get_db, STORAGE_CHUNKS, STORAGE_APPS, ensure_schema
 from .models import (
@@ -60,7 +61,7 @@ public = APIRouter(prefix="/api/public", tags=["public"])
 @app.post("/api/auth/register")
 def auth_register(payload: AuthRegister):
     user = create_user(payload.email, payload.password, payload.username)
-    token = issue_token(user["id"])
+    token = issue_token(user["id"], ttl_days=7)
     return {
         "token": token,
         "user": user,
@@ -72,7 +73,7 @@ def auth_login(payload: AuthLogin):
     user = authenticate(payload.email, payload.password)
     if not user:
         raise HTTPException(401, "Invalid credentials")
-    token = issue_token(user["id"])
+    token = issue_token(user["id"], ttl_days=7)
     return {
         "token": token,
         "user": user,
@@ -110,6 +111,14 @@ def auth_upgrade_dev(user: dict = Depends(require_user)):
     return {"user": updated}
 
 
+@app.post("/api/auth/logout")
+def auth_logout(user: dict = Depends(require_user)):
+    token = user.get("token")
+    if token:
+        revoke_token(token)
+    return {"ok": True}
+
+
 @app.post("/api/auth/avatar")
 async def auth_avatar(
     file: UploadFile = File(...),
@@ -135,6 +144,11 @@ def auth_bootstrap_admin(payload: AuthBootstrap):
         raise HTTPException(403, "Bootstrap disabled or invalid secret")
     user = set_role_by_email(payload.email, "admin")
     return {"user": user}
+
+
+@app.get("/api/health")
+def health():
+    return {"ok": True}
 
 
 @admin.get("/users")

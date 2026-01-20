@@ -158,3 +158,15 @@ class AuthService:
         r.raise_for_status()
         data = r.json()
         return self._user_from_payload(data.get("user", {}), self._token)
+
+    def logout(self) -> None:
+        if not self._token:
+            return
+        try:
+            requests.post(
+                f"{self.base_url}/api/auth/logout",
+                headers=self._auth_headers(),
+                timeout=10,
+            )
+        finally:
+            self._token = None

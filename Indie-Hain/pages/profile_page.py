@@ -236,6 +236,11 @@ class ProfilePage(QWidget):
         self.profile_updated.emit()
 
     def _on_logout(self):
+        if store.auth_service:
+            try:
+                store.auth_service.logout()
+            except Exception:
+                pass
         store.session.current_user = None
         store.clear_session()
         self._clear_form()

@@ -5,7 +5,7 @@ import hmac
 import os
 import secrets
 import hashlib
-from datetime import datetime
+from datetime import datetime, timedelta
 from fastapi import Depends, Header, HTTPException
 
 from .db import get_db
@@ -28,12 +28,14 @@ def _verify_password(password: str, stored: str) -> bool:
     return hmac.compare_digest(new, dk_hex)
 
 
-def _create_session(user_id: int) -> str:
+def _create_session(user_id: int, ttl_days: int = 7) -> str:
     token = secrets.token_hex(32)
+    now = datetime.utcnow()
+    expires = now + timedelta(days=int(ttl_days))
     with get_db() as db:
         db.execute(
-            "INSERT INTO sessions(token, user_id, created_at) VALUES(?,?,?)",
-            (token, int(user_id), datetime.utcnow().isoformat()),
+            "INSERT INTO sessions(token, user_id, created_at, expires_at) VALUES(?,?,?,?)",
+            (token, int(user_id), now.isoformat(), expires.isoformat()),
         )
         db.commit()
     return token
@@ -43,7 +45,7 @@ def _user_by_token(token: str) -> dict | None:
     with get_db() as db:
         row = db.execute(
             """
-            SELECT u.id, u.email, u.role, u.username, u.avatar_url
+            SELECT u.id, u.email, u.role, u.username, u.avatar_url, s.expires_at
             FROM sessions s
             JOIN users u ON u.id = s.user_id
             WHERE s.token = ?
@@ -52,6 +54,13 @@ def _user_by_token(token: str) -> dict | None:
         ).fetchone()
     if not row:
         return None
+    expires_at = row["expires_at"]
+    if expires_at:
+        try:
+            if datetime.utcnow() >= datetime.fromisoformat(expires_at):
+                return None
+        except Exception:
+            return None
     return {
         "user_id": int(row["id"]),
         "email": row["email"],
@@ -129,8 +138,14 @@ def authenticate(email: str, password: str) -> dict | None:
     return None
 
 
-def issue_token(user_id: int) -> str:
-    return _create_session(user_id)
+def issue_token(user_id: int, ttl_days: int = 7) -> str:
+    return _create_session(user_id, ttl_days=ttl_days)
+
+
+def revoke_token(token: str) -> None:
+    with get_db() as db:
+        db.execute("DELETE FROM sessions WHERE token = ?", (token,))
+        db.commit()
 
 
 def update_username(user_id: int, username: str) -> dict:
@@ -228,6 +243,7 @@ def get_user_from_headers(
     user = _user_by_token(token)
     if not user:
         raise HTTPException(401, "Invalid token")
+    user["token"] = token
     return user
 
 
