@@ -220,22 +220,15 @@ def update_avatar_url(user_id: int, avatar_url: str) -> dict:
 
 
 def get_user_from_headers(
-    x_user_id: str = Header(default="0"),
-    x_role: str = Header(default="user"),
     authorization: str | None = Header(default=None),
 ):
-    if authorization and authorization.lower().startswith("bearer "):
-        token = authorization.split(" ", 1)[1].strip()
-        user = _user_by_token(token)
-        if not user:
-            raise HTTPException(401, "Invalid token")
-        return user
-
-    try:
-        uid = int(x_user_id)
-    except ValueError:
-        uid = 0
-    return {"user_id": uid, "role": (x_role or "user").lower()}
+    if not authorization or not authorization.lower().startswith("bearer "):
+        raise HTTPException(401, "Authentication required")
+    token = authorization.split(" ", 1)[1].strip()
+    user = _user_by_token(token)
+    if not user:
+        raise HTTPException(401, "Invalid token")
+    return user
 
 
 def require_user(user: dict = Depends(get_user_from_headers)):

@@ -3,10 +3,10 @@ from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import requests, json, os, hashlib
 
-from services.env import api_base
+from services.env import api_base, session_path
 
 API = api_base()  # Distribution-Backend (FastAPI)
-SESSION_PATH = os.path.join("data", "session.json")
+SESSION_PATH = str(session_path())
 
 def _headers(role="user"):
     user_id = 0
@@ -18,10 +18,9 @@ def _headers(role="user"):
             token = data.get("token")
     except FileNotFoundError:
         pass
-    headers = {"X-User-Id": str(user_id or 0), "X-Role": role}
     if token:
-        headers["Authorization"] = f"Bearer {token}"
-    return headers
+        return {"Authorization": f"Bearer {token}"}
+    return {}
 
 def get_manifest(slug: str, platform: str = "windows", channel: str = "stable") -> dict:
     r = requests.get(f"{API}/api/manifest/{slug}/{platform}/{channel}", headers=_headers("user"))

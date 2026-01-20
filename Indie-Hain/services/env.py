@@ -5,6 +5,11 @@ from pathlib import Path
 
 DEFAULT_API = "http://127.0.0.1:8000"
 
+def session_path() -> Path:
+    root = Path.home() / ".indie-hain"
+    root.mkdir(parents=True, exist_ok=True)
+    return root / "session.json"
+
 def _settings_api() -> str | None:
     for candidate in _settings_paths():
         if candidate.exists():

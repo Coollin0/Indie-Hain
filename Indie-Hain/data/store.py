@@ -7,7 +7,9 @@ from typing import Iterable, Dict, List, Optional, Set
 from dataclasses import dataclass
 import json
 
-SESSION_JSON_PATH = Path(__file__).resolve().parents[1] / "data" / "session.json"
+from services.env import session_path
+
+SESSION_JSON_PATH = session_path()
 
 # --- Auth: Session & Rollen (failsafe Import) ---
 try:
@@ -454,7 +456,7 @@ def cart_replace_all(games: Iterable[Dict]):
 
 # === Session-Persistenz ====================================================
 
-SESSION_PATH = Path(__file__).resolve().parent / "session.json"
+SESSION_PATH = session_path()
 
 def save_session(user=None):
     """

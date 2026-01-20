@@ -4,7 +4,8 @@ from typing import Callable, Dict, Any, List
 import os, json, requests, hashlib
 
 API = os.environ.get("DIST_API", "http://127.0.0.1:8000")
-SESSION_PATH = Path(__file__).resolve().parents[1] / "data" / "session.json"
+from services.env import session_path
+SESSION_PATH = session_path()
 CHUNK_SIZE = 8 * 1024 * 1024  # 8 MB
 
 def _headers(role="dev") -> Dict[str, str]:
@@ -18,11 +19,9 @@ def _headers(role="dev") -> Dict[str, str]:
         token = s.get("token")
     except FileNotFoundError:
         pass
-    h = {"X-User-Id": str(uid or 0), "X-Role": r}
     if token:
-        h["Authorization"] = f"Bearer {token}"
-    print(f"[uploader headers] {h}  session={SESSION_PATH}")  # Debug
-    return h
+        return {"Authorization": f"Bearer {token}"}
+    return {}
 
 def slugify(s: str) -> str:
     import re
