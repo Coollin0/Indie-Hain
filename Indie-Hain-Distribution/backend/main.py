@@ -1,5 +1,5 @@
 # backend/main.py
-from fastapi import FastAPI, HTTPException, Body, Depends, APIRouter, UploadFile, File
+from fastapi import FastAPI, HTTPException, Body, Depends, APIRouter, UploadFile, File, Header
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from typing import Iterator, Optional
@@ -13,12 +13,15 @@ from .auth import (
     require_admin,
     authenticate,
     create_user,
-    issue_token,
+    issue_tokens,
+    refresh_tokens,
     update_username,
     set_role_by_email,
     set_role_by_id,
     update_avatar_url,
-    revoke_token,
+    revoke_session_by_id,
+    revoke_session_by_refresh,
+    session_id_from_access_token,
 )
 from .db import get_db, STORAGE_CHUNKS, STORAGE_APPS, ensure_schema
 from .models import (
@@ -32,6 +35,8 @@ from .models import (
     AuthLogin,
     AuthProfileUpdate,
     AuthBootstrap,
+    AuthRefresh,
+    AuthLogout,
     AdminRoleUpdate,
 )
 from pathlib import Path as _Path
@@ -61,11 +66,7 @@ public = APIRouter(prefix="/api/public", tags=["public"])
 @app.post("/api/auth/register")
 def auth_register(payload: AuthRegister):
     user = create_user(payload.email, payload.password, payload.username)
-    token = issue_token(user["id"], ttl_days=7)
-    return {
-        "token": token,
-        "user": user,
-    }
+    return issue_tokens(user, payload.device_id)
 
 
 @app.post("/api/auth/login")
@@ -73,11 +74,12 @@ def auth_login(payload: AuthLogin):
     user = authenticate(payload.email, payload.password)
     if not user:
         raise HTTPException(401, "Invalid credentials")
-    token = issue_token(user["id"], ttl_days=7)
-    return {
-        "token": token,
-        "user": user,
-    }
+    return issue_tokens(user, payload.device_id)
+
+
+@app.post("/api/auth/refresh")
+def auth_refresh(payload: AuthRefresh):
+    return refresh_tokens(payload.refresh_token, payload.device_id)
 
 
 @app.get("/api/auth/me")
@@ -107,16 +109,22 @@ def auth_profile(payload: AuthProfileUpdate, user: dict = Depends(require_user))
 
 @app.post("/api/auth/upgrade/dev")
 def auth_upgrade_dev(user: dict = Depends(require_user)):
-    updated = set_role_by_id(user["user_id"], "dev")
+    updated = set_role_by_id(user["user_id"], "dev", revoke_sessions=False)
     return {"user": updated}
 
 
 @app.post("/api/auth/logout")
-def auth_logout(user: dict = Depends(require_user)):
-    token = user.get("token")
-    if token:
-        revoke_token(token)
-    return {"ok": True}
+def auth_logout(payload: AuthLogout, authorization: str | None = Header(default=None)):
+    if authorization and authorization.lower().startswith("bearer "):
+        token = authorization.split(" ", 1)[1].strip()
+        session_id = session_id_from_access_token(token)
+        if session_id:
+            revoke_session_by_id(session_id)
+            return {"ok": True}
+    if payload.refresh_token:
+        revoke_session_by_refresh(payload.refresh_token)
+        return {"ok": True}
+    raise HTTPException(400, "Missing session")
 
 
 @app.post("/api/auth/avatar")
@@ -175,7 +183,7 @@ def admin_set_role(user_id: int, payload: AdminRoleUpdate, user=Depends(require_
     role = (payload.role or "user").lower()
     if role not in ("user", "dev", "admin"):
         raise HTTPException(400, "invalid role")
-    updated = set_role_by_id(user_id, role)
+    updated = set_role_by_id(user_id, role, revoke_sessions=True)
     return {"user": updated}
 
 

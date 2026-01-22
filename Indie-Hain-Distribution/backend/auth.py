@@ -5,10 +5,32 @@ import hmac
 import os
 import secrets
 import hashlib
+import uuid
 from datetime import datetime, timedelta
 from fastapi import Depends, Header, HTTPException
+import jwt
 
 from .db import get_db
+
+
+ACCESS_TTL_MINUTES = 15
+REFRESH_TTL_DAYS = 30
+JWT_ALG = "HS256"
+
+
+def _secret(name: str, fallback: str) -> str:
+    val = os.environ.get(name)
+    if val:
+        return val
+    return fallback
+
+
+JWT_SECRET = _secret("JWT_SECRET", "dev-secret")
+REFRESH_SECRET = _secret("REFRESH_SECRET", JWT_SECRET)
+
+
+def _now() -> datetime:
+    return datetime.utcnow()
 
 
 def _hash_password(password: str, salt: bytes | None = None) -> str:
@@ -28,41 +50,60 @@ def _verify_password(password: str, stored: str) -> bool:
     return hmac.compare_digest(new, dk_hex)
 
 
-def _create_session(user_id: int, ttl_days: int = 7) -> str:
-    token = secrets.token_hex(32)
-    now = datetime.utcnow()
-    expires = now + timedelta(days=int(ttl_days))
+def _hash_refresh_secret(secret_part: str) -> str:
+    return hmac.new(REFRESH_SECRET.encode("utf-8"), secret_part.encode("utf-8"), hashlib.sha256).hexdigest()
+
+
+def _build_refresh_token(session_id: str, secret_part: str) -> str:
+    return f"{session_id}.{secret_part}"
+
+
+def _parse_refresh_token(refresh_token: str) -> tuple[str, str] | None:
+    if not refresh_token or "." not in refresh_token:
+        return None
+    session_id, secret_part = refresh_token.split(".", 1)
+    if not session_id or not secret_part:
+        return None
+    return session_id, secret_part
+
+
+def _session_row(session_id: str):
     with get_db() as db:
-        db.execute(
-            "INSERT INTO sessions(token, user_id, created_at, expires_at) VALUES(?,?,?,?)",
-            (token, int(user_id), now.isoformat(), expires.isoformat()),
-        )
-        db.commit()
-    return token
+        return db.execute(
+            """
+            SELECT id, user_id, device_id, refresh_token_hash, refresh_expires_at, revoked_at
+            FROM sessions
+            WHERE id = ?
+            """,
+            (session_id,),
+        ).fetchone()
 
 
-def _user_by_token(token: str) -> dict | None:
+def _session_active(session_id: str) -> bool:
+    row = _session_row(session_id)
+    if not row:
+        return False
+    if row["revoked_at"]:
+        return False
+    if row["refresh_expires_at"]:
+        try:
+            if _now() >= datetime.fromisoformat(row["refresh_expires_at"]):
+                return False
+        except ValueError:
+            return False
+    return True
+
+
+def _user_by_id(user_id: int) -> dict | None:
     with get_db() as db:
         row = db.execute(
-            """
-            SELECT u.id, u.email, u.role, u.username, u.avatar_url, s.expires_at
-            FROM sessions s
-            JOIN users u ON u.id = s.user_id
-            WHERE s.token = ?
-            """,
-            (token,),
+            "SELECT id, email, role, username, avatar_url FROM users WHERE id = ?",
+            (int(user_id),),
         ).fetchone()
     if not row:
         return None
-    expires_at = row["expires_at"]
-    if expires_at:
-        try:
-            if datetime.utcnow() >= datetime.fromisoformat(expires_at):
-                return None
-        except Exception:
-            return None
     return {
-        "user_id": int(row["id"]),
+        "id": int(row["id"]),
         "email": row["email"],
         "role": (row["role"] or "user").lower(),
         "username": row["username"] or "",
@@ -88,6 +129,153 @@ def _user_by_email(email: str) -> dict | None:
     }
 
 
+def _issue_access_token(user: dict, session_id: str, device_id: str | None) -> str:
+    now = _now()
+    payload = {
+        "sub": str(user["id"]),
+        "role": user["role"],
+        "sid": session_id,
+        "device_id": device_id,
+        "iat": int(now.timestamp()),
+        "exp": int((now + timedelta(minutes=ACCESS_TTL_MINUTES)).timestamp()),
+        "jti": secrets.token_hex(8),
+    }
+    return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALG)
+
+
+def _decode_access_token(token: str) -> dict:
+    try:
+        return jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALG])
+    except jwt.ExpiredSignatureError as exc:
+        raise HTTPException(401, "Token expired") from exc
+    except jwt.PyJWTError as exc:
+        raise HTTPException(401, "Invalid token") from exc
+
+
+def session_id_from_access_token(token: str) -> str | None:
+    try:
+        claims = _decode_access_token(token)
+    except HTTPException:
+        return None
+    return claims.get("sid")
+
+
+def _create_session(user_id: int, device_id: str | None) -> tuple[str, str]:
+    session_id = uuid.uuid4().hex
+    secret_part = secrets.token_urlsafe(32)
+    refresh_token_hash = _hash_refresh_secret(secret_part)
+    now = _now()
+    refresh_expires_at = now + timedelta(days=REFRESH_TTL_DAYS)
+    with get_db() as db:
+        db.execute(
+            """
+            INSERT INTO sessions(id, user_id, device_id, refresh_token_hash, created_at, last_used_at, refresh_expires_at)
+            VALUES(?,?,?,?,?,?,?)
+            """,
+            (
+                session_id,
+                int(user_id),
+                device_id,
+                refresh_token_hash,
+                now.isoformat(),
+                now.isoformat(),
+                refresh_expires_at.isoformat(),
+            ),
+        )
+        db.commit()
+    return session_id, _build_refresh_token(session_id, secret_part)
+
+
+def issue_tokens(user: dict, device_id: str | None) -> dict:
+    session_id, refresh_token = _create_session(user["id"], device_id)
+    access_token = _issue_access_token(user, session_id, device_id)
+    return {
+        "access_token": access_token,
+        "refresh_token": refresh_token,
+        "user": user,
+    }
+
+
+def refresh_tokens(refresh_token: str, device_id: str | None) -> dict:
+    parsed = _parse_refresh_token(refresh_token)
+    if not parsed:
+        raise HTTPException(401, "Invalid refresh token")
+    session_id, secret_part = parsed
+    row = _session_row(session_id)
+    if not row or row["revoked_at"]:
+        raise HTTPException(401, "Invalid refresh token")
+    if row["refresh_expires_at"]:
+        try:
+            if _now() >= datetime.fromisoformat(row["refresh_expires_at"]):
+                raise HTTPException(401, "Refresh token expired")
+        except ValueError as exc:
+            raise HTTPException(401, "Refresh token expired") from exc
+    if device_id and row["device_id"] and device_id != row["device_id"]:
+        raise HTTPException(401, "Device mismatch")
+
+    expected_hash = _hash_refresh_secret(secret_part)
+    if not hmac.compare_digest(expected_hash, row["refresh_token_hash"]):
+        with get_db() as db:
+            db.execute(
+                "UPDATE sessions SET revoked_at = ? WHERE id = ?",
+                (_now().isoformat(), session_id),
+            )
+            db.commit()
+        raise HTTPException(401, "Refresh reuse detected")
+
+    user = _user_by_id(row["user_id"])
+    if not user:
+        raise HTTPException(401, "Invalid refresh token")
+
+    new_secret = secrets.token_urlsafe(32)
+    new_hash = _hash_refresh_secret(new_secret)
+    now = _now()
+    refresh_expires_at = now + timedelta(days=REFRESH_TTL_DAYS)
+    with get_db() as db:
+        db.execute(
+            """
+            UPDATE sessions
+            SET refresh_token_hash = ?, last_used_at = ?, refresh_expires_at = ?
+            WHERE id = ?
+            """,
+            (new_hash, now.isoformat(), refresh_expires_at.isoformat(), session_id),
+        )
+        db.commit()
+
+    access_token = _issue_access_token(user, session_id, row["device_id"])
+    return {
+        "access_token": access_token,
+        "refresh_token": _build_refresh_token(session_id, new_secret),
+        "user": user,
+    }
+
+
+def revoke_session_by_id(session_id: str) -> None:
+    with get_db() as db:
+        db.execute(
+            "UPDATE sessions SET revoked_at = ? WHERE id = ?",
+            (_now().isoformat(), session_id),
+        )
+        db.commit()
+
+
+def revoke_sessions_for_user(user_id: int) -> None:
+    with get_db() as db:
+        db.execute(
+            "UPDATE sessions SET revoked_at = ? WHERE user_id = ?",
+            (_now().isoformat(), int(user_id)),
+        )
+        db.commit()
+
+
+def revoke_session_by_refresh(refresh_token: str) -> None:
+    parsed = _parse_refresh_token(refresh_token)
+    if not parsed:
+        return
+    session_id, _ = parsed
+    revoke_session_by_id(session_id)
+
+
 def create_user(email: str, password: str, username: str) -> dict:
     email = email.strip().lower()
     username = username.strip()
@@ -101,7 +289,7 @@ def create_user(email: str, password: str, username: str) -> dict:
                 INSERT INTO users(email, password_hash, role, username, created_at)
                 VALUES(?, ?, 'user', ?, ?)
                 """,
-                (email, ph, username, datetime.utcnow().isoformat()),
+                (email, ph, username, _now().isoformat()),
             )
             db.commit()
         except Exception as exc:
@@ -138,16 +326,6 @@ def authenticate(email: str, password: str) -> dict | None:
     return None
 
 
-def issue_token(user_id: int, ttl_days: int = 7) -> str:
-    return _create_session(user_id, ttl_days=ttl_days)
-
-
-def revoke_token(token: str) -> None:
-    with get_db() as db:
-        db.execute("DELETE FROM sessions WHERE token = ?", (token,))
-        db.commit()
-
-
 def update_username(user_id: int, username: str) -> dict:
     username = username.strip()
     if not username:
@@ -158,19 +336,10 @@ def update_username(user_id: int, username: str) -> dict:
             (username, int(user_id)),
         )
         db.commit()
-        row = db.execute(
-            "SELECT id, email, role, username, avatar_url FROM users WHERE id = ?",
-            (int(user_id),),
-        ).fetchone()
-    if not row:
+    user = _user_by_id(user_id)
+    if not user:
         raise HTTPException(404, "user not found")
-    return {
-        "id": int(row["id"]),
-        "email": row["email"],
-        "role": (row["role"] or "user").lower(),
-        "username": row["username"] or "",
-        "avatar_url": row["avatar_url"] or "",
-    }
+    return user
 
 
 def set_role_by_email(email: str, role: str) -> dict:
@@ -178,12 +347,20 @@ def set_role_by_email(email: str, role: str) -> dict:
     with get_db() as db:
         db.execute("UPDATE users SET role = ? WHERE email = ?", (role, email))
         db.commit()
+    user = _user_by_id_by_email(email)
+    if not user:
+        raise HTTPException(404, "user not found")
+    return user
+
+
+def _user_by_id_by_email(email: str) -> dict | None:
+    with get_db() as db:
         row = db.execute(
             "SELECT id, email, role, username, avatar_url FROM users WHERE email = ?",
             (email,),
         ).fetchone()
     if not row:
-        raise HTTPException(404, "user not found")
+        return None
     return {
         "id": int(row["id"]),
         "email": row["email"],
@@ -193,24 +370,16 @@ def set_role_by_email(email: str, role: str) -> dict:
     }
 
 
-def set_role_by_id(user_id: int, role: str) -> dict:
+def set_role_by_id(user_id: int, role: str, revoke_sessions: bool = False) -> dict:
     with get_db() as db:
         db.execute("UPDATE users SET role = ? WHERE id = ?", (role, int(user_id)))
-        db.execute("DELETE FROM sessions WHERE user_id = ?", (int(user_id),))
         db.commit()
-        row = db.execute(
-            "SELECT id, email, role, username, avatar_url FROM users WHERE id = ?",
-            (int(user_id),),
-        ).fetchone()
-    if not row:
+    if revoke_sessions:
+        revoke_sessions_for_user(user_id)
+    user = _user_by_id(user_id)
+    if not user:
         raise HTTPException(404, "user not found")
-    return {
-        "id": int(row["id"]),
-        "email": row["email"],
-        "role": (row["role"] or "user").lower(),
-        "username": row["username"] or "",
-        "avatar_url": row["avatar_url"] or "",
-    }
+    return user
 
 
 def update_avatar_url(user_id: int, avatar_url: str) -> dict:
@@ -220,19 +389,10 @@ def update_avatar_url(user_id: int, avatar_url: str) -> dict:
             (avatar_url, int(user_id)),
         )
         db.commit()
-        row = db.execute(
-            "SELECT id, email, role, username, avatar_url FROM users WHERE id = ?",
-            (int(user_id),),
-        ).fetchone()
-    if not row:
+    user = _user_by_id(user_id)
+    if not user:
         raise HTTPException(404, "user not found")
-    return {
-        "id": int(row["id"]),
-        "email": row["email"],
-        "role": (row["role"] or "user").lower(),
-        "username": row["username"] or "",
-        "avatar_url": row["avatar_url"] or "",
-    }
+    return user
 
 
 def get_user_from_headers(
@@ -241,30 +401,40 @@ def get_user_from_headers(
     if not authorization or not authorization.lower().startswith("bearer "):
         raise HTTPException(401, "Authentication required")
     token = authorization.split(" ", 1)[1].strip()
-    user = _user_by_token(token)
+    claims = _decode_access_token(token)
+    session_id = claims.get("sid")
+    if not session_id or not _session_active(session_id):
+        raise HTTPException(401, "Invalid session")
+    user = _user_by_id(int(claims.get("sub", 0)))
     if not user:
         raise HTTPException(401, "Invalid token")
     user["token"] = token
+    user["session_id"] = session_id
+    user["role"] = (user.get("role") or "user").lower()
     return user
 
 
 def require_user(user: dict = Depends(get_user_from_headers)):
-    if user.get("user_id", 0) <= 0:
+    if user.get("id", 0) <= 0:
         raise HTTPException(401, "Authentication required")
-    return user
+    return {
+        "user_id": int(user["id"]),
+        "email": user.get("email", ""),
+        "role": user.get("role", "user"),
+        "username": user.get("username", ""),
+        "avatar_url": user.get("avatar_url", ""),
+        "token": user.get("token"),
+        "session_id": user.get("session_id"),
+    }
 
 
-def require_dev(user: dict = Depends(get_user_from_headers)):
-    if user.get("user_id", 0) <= 0:
-        raise HTTPException(401, "Authentication required")
+def require_dev(user: dict = Depends(require_user)):
     if user.get("role") not in ("dev", "admin"):
         raise HTTPException(403, "Developer role required")
     return user
 
 
-def require_admin(user: dict = Depends(get_user_from_headers)):
-    if user.get("user_id", 0) <= 0:
-        raise HTTPException(401, "Authentication required")
+def require_admin(user: dict = Depends(require_user)):
     if user.get("role") != "admin":
         raise HTTPException(403, "Admin role required")
     return user

@@ -4,11 +4,7 @@ API = os.environ.get("DIST_API", "http://127.0.0.1:8000")
 
 def _hdrs():
     from data import store
-    user = getattr(store, "session", None) and store.session.current_user
-    token = getattr(user, "token", None) if user else None
-    if token:
-        return {"Authorization": f"Bearer {token}"}
-    return {}
+    return store.auth_headers()
 
 def list_submissions(status=None):
     params = {"status": status} if status else None

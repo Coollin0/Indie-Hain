@@ -6,11 +6,13 @@ class AuthRegister(BaseModel):
     email: str
     password: str
     username: str
+    device_id: Optional[str] = None
 
 
 class AuthLogin(BaseModel):
     email: str
     password: str
+    device_id: Optional[str] = None
 
 
 class AuthProfileUpdate(BaseModel):
@@ -20,6 +22,15 @@ class AuthProfileUpdate(BaseModel):
 class AuthBootstrap(BaseModel):
     email: str
     secret: str
+
+
+class AuthRefresh(BaseModel):
+    refresh_token: str
+    device_id: Optional[str] = None
+
+
+class AuthLogout(BaseModel):
+    refresh_token: Optional[str] = None
 
 
 class AdminRoleUpdate(BaseModel):

@@ -464,12 +464,12 @@ def save_session(user=None):
     Falls kein user übergeben wird, wird session.current_user genutzt.
     """
     # existierende Persistierung unverändert lassen:
-    if is_logged_in() and getattr(session.current_user, "id", None) is not None:
-        token = getattr(session.current_user, "token", None)
-        SESSION_PATH.write_text(json.dumps({
+    if is_logged_in() and getattr(session.current_user, "id", None) is not None and auth_service:
+        payload = {
             "user_id": int(session.current_user.id),
-            "token": token,
-        }))
+            **auth_service.session_payload(),
+        }
+        SESSION_PATH.write_text(json.dumps(payload))
     else:
         clear_session()
         return
@@ -478,30 +478,14 @@ def save_session(user=None):
         user = session.current_user
 
     # --- Spiegelung für den Uploader (robust für dict/objekt) ---
-    if isinstance(user, dict):
-        uid = int(user.get("id") or user.get("user_id") or 0)
-        role = (user.get("role") or "user").lower()
-        token = user.get("token")
-    else:
-        uid = int(getattr(user, "id", 0) or 0)
-        role = (getattr(user, "role", "user") or "user").lower()
-        token = getattr(user, "token", None)
-
-    SESSION_JSON_PATH.parent.mkdir(parents=True, exist_ok=True)
-    with open(SESSION_JSON_PATH, "w", encoding="utf-8") as f:
-        json.dump({"user_id": uid, "role": role, "token": token}, f, indent=2)
+    # Sitzung für Hintergrundprozesse spiegeln
+    # Session-Datei ist bereits geschrieben; keine doppelte Persistierung.
 
 def safe_session(user):
     return save_session(user)
 
 def sync_uploader_session_from_current():
-    u = session.current_user
-    SESSION_JSON_PATH.parent.mkdir(parents=True, exist_ok=True)
-    uid = int(getattr(u, "id", 0) or 0)
-    role = (getattr(u, "role", "user") or "user").lower()
-    token = getattr(u, "token", None)
-    with open(SESSION_JSON_PATH, "w", encoding="utf-8") as f:
-        json.dump({"user_id": uid, "role": role, "token": token}, f, indent=2)
+    save_session()
 
 def clear_session():
     try:
@@ -518,11 +502,10 @@ def load_session() -> bool:
         return False
     try:
         data = json.loads(SESSION_PATH.read_text())
-        token = data.get("token")
-        if not token:
-            raise RuntimeError("missing token")
-        auth_service.set_token(token)
-        u = auth_service.me(token)
+        refresh_token = data.get("refresh_token")
+        device_id = data.get("device_id")
+        auth_service.set_session(refresh_token, device_id)
+        u = auth_service.me()
         if u:
             session.current_user = u
             return True
@@ -530,3 +513,21 @@ def load_session() -> bool:
         pass
     clear_session()
     return False
+
+
+def auth_headers() -> dict:
+    if not auth_service:
+        return {}
+    token = auth_service.access_token()
+    if not token and auth_service.session_payload().get("refresh_token"):
+        user = auth_service.refresh()
+        if user:
+            session.current_user = user
+            save_session()
+            token = auth_service.access_token()
+        else:
+            session.current_user = None
+            clear_session()
+    if token:
+        return {"Authorization": f"Bearer {token}"}
+    return {}

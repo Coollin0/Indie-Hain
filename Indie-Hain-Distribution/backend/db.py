@@ -50,17 +50,47 @@ def ensure_schema():
         db.execute(
             """
             CREATE TABLE IF NOT EXISTS sessions (
-                token TEXT PRIMARY KEY,
+                id TEXT PRIMARY KEY,
                 user_id INTEGER NOT NULL,
+                device_id TEXT,
+                refresh_token_hash TEXT NOT NULL,
                 created_at TEXT,
-                expires_at TEXT
+                last_used_at TEXT,
+                refresh_expires_at TEXT,
+                revoked_at TEXT
             )
             """
         )
 
         session_cols = [r[1] for r in db.execute("PRAGMA table_info(sessions)").fetchall()]
-        if "expires_at" not in session_cols:
-            db.execute("ALTER TABLE sessions ADD COLUMN expires_at TEXT")
+        if "token" in session_cols and "id" not in session_cols:
+            db.execute("ALTER TABLE sessions RENAME TO sessions_old")
+            db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS sessions (
+                    id TEXT PRIMARY KEY,
+                    user_id INTEGER NOT NULL,
+                    device_id TEXT,
+                    refresh_token_hash TEXT NOT NULL,
+                    created_at TEXT,
+                    last_used_at TEXT,
+                    refresh_expires_at TEXT,
+                    revoked_at TEXT
+                )
+                """
+            )
+            db.execute("DROP TABLE sessions_old")
+        else:
+            if "device_id" not in session_cols:
+                db.execute("ALTER TABLE sessions ADD COLUMN device_id TEXT")
+            if "refresh_token_hash" not in session_cols:
+                db.execute("ALTER TABLE sessions ADD COLUMN refresh_token_hash TEXT")
+            if "last_used_at" not in session_cols:
+                db.execute("ALTER TABLE sessions ADD COLUMN last_used_at TEXT")
+            if "refresh_expires_at" not in session_cols:
+                db.execute("ALTER TABLE sessions ADD COLUMN refresh_expires_at TEXT")
+            if "revoked_at" not in session_cols:
+                db.execute("ALTER TABLE sessions ADD COLUMN revoked_at TEXT")
 
         user_cols = [r[1] for r in db.execute("PRAGMA table_info(users)").fetchall()]
         if "username" not in user_cols:

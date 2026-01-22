@@ -559,10 +559,7 @@ class Main(QMainWindow):
     def _refresh_session_from_server(self):
         if not store.is_logged_in() or not store.auth_service:
             return
-        token = getattr(store.session.current_user, "token", None)
-        if not token:
-            return
-        refreshed = store.auth_service.me(token)
+        refreshed = store.auth_service.me()
         if refreshed:
             store.session.current_user = refreshed
             store.save_session()

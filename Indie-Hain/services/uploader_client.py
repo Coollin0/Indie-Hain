@@ -1,27 +1,14 @@
 from __future__ import annotations
 from pathlib import Path
 from typing import Callable, Dict, Any, List
-import os, json, requests, hashlib
+import os, requests, hashlib
 
 API = os.environ.get("DIST_API", "http://127.0.0.1:8000")
-from services.env import session_path
-SESSION_PATH = session_path()
 CHUNK_SIZE = 8 * 1024 * 1024  # 8 MB
 
 def _headers(role="dev") -> Dict[str, str]:
-    uid, r = 0, role
-    token = None
-    try:
-        with open(SESSION_PATH, "r", encoding="utf-8") as f:
-            s = json.load(f)
-        uid = s.get("user_id") or s.get("id") or 0
-        r = (s.get("role") or role).lower()
-        token = s.get("token")
-    except FileNotFoundError:
-        pass
-    if token:
-        return {"Authorization": f"Bearer {token}"}
-    return {}
+    from data import store
+    return store.auth_headers()
 
 def slugify(s: str) -> str:
     import re

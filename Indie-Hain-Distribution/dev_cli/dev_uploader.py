@@ -1,10 +1,11 @@
 from pathlib import Path
-import hashlib, json, requests, sys
+import hashlib, json, requests, sys, os
 
 CHUNK_SIZE = 8 * 1024 * 1024
 
 API = "http://127.0.0.1:8000"
-HEADERS = {"X-User-Id": "1", "X-Role": "dev"} # MVP-Auth
+ACCESS_TOKEN = os.environ.get("INDIE_HAIN_ACCESS_TOKEN")
+HEADERS = {"Authorization": f"Bearer {ACCESS_TOKEN}"} if ACCESS_TOKEN else {}
 
 
 def sha256_bytes(b: bytes) -> str:

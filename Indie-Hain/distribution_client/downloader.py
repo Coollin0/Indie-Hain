@@ -1,26 +1,15 @@
 # distribution_client/downloader.py
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
-import requests, json, os, hashlib
+import requests, hashlib
 
-from services.env import api_base, session_path
+from services.env import api_base
 
 API = api_base()  # Distribution-Backend (FastAPI)
-SESSION_PATH = str(session_path())
 
 def _headers(role="user"):
-    user_id = 0
-    token = None
-    try:
-        with open(SESSION_PATH, "r", encoding="utf-8") as f:
-            data = json.load(f)
-            user_id = data.get("user_id", 0)
-            token = data.get("token")
-    except FileNotFoundError:
-        pass
-    if token:
-        return {"Authorization": f"Bearer {token}"}
-    return {}
+    from data import store
+    return store.auth_headers()
 
 def get_manifest(slug: str, platform: str = "windows", channel: str = "stable") -> dict:
     r = requests.get(f"{API}/api/manifest/{slug}/{platform}/{channel}", headers=_headers("user"))
