@@ -12,6 +12,7 @@ from .auth import (
     require_user,
     require_admin,
     authenticate,
+    authenticate_username,
     create_user,
     issue_tokens,
     refresh_tokens,
@@ -71,7 +72,11 @@ def auth_register(payload: AuthRegister):
 
 @app.post("/api/auth/login")
 def auth_login(payload: AuthLogin):
-    user = authenticate(payload.email, payload.password)
+    user = None
+    if payload.email:
+        user = authenticate(payload.email, payload.password)
+    elif payload.username:
+        user = authenticate_username(payload.username, payload.password)
     if not user:
         raise HTTPException(401, "Invalid credentials")
     return issue_tokens(user, payload.device_id)

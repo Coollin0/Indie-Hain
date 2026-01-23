@@ -129,6 +129,23 @@ def _user_by_email(email: str) -> dict | None:
     }
 
 
+def _user_by_username(username: str) -> dict | None:
+    with get_db() as db:
+        row = db.execute(
+            "SELECT id, email, role, username, avatar_url, password_hash FROM users WHERE lower(username) = lower(?)",
+            (username,),
+        ).fetchone()
+    if not row:
+        return None
+    return {
+        "id": int(row["id"]),
+        "email": row["email"],
+        "role": (row["role"] or "user").lower(),
+        "username": row["username"] or "",
+        "avatar_url": row["avatar_url"] or "",
+        "password_hash": row["password_hash"],
+    }
+
 def _issue_access_token(user: dict, session_id: str, device_id: str | None) -> str:
     now = _now()
     payload = {
@@ -313,6 +330,22 @@ def create_user(email: str, password: str, username: str) -> dict:
 def authenticate(email: str, password: str) -> dict | None:
     email = email.strip().lower()
     user = _user_by_email(email)
+    if not user:
+        return None
+    if _verify_password(password, user["password_hash"]):
+        return {
+            "id": int(user["id"]),
+            "email": user["email"],
+            "role": user["role"],
+            "username": user["username"],
+            "avatar_url": user["avatar_url"],
+        }
+    return None
+
+
+def authenticate_username(username: str, password: str) -> dict | None:
+    username = username.strip()
+    user = _user_by_username(username)
     if not user:
         return None
     if _verify_password(password, user["password_hash"]):
