@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field, root_validator
+from pydantic import BaseModel, Field, model_validator
 from typing import List, Literal, Optional
 
 
@@ -15,11 +15,11 @@ class AuthLogin(BaseModel):
     password: str
     device_id: Optional[str] = None
 
-    @root_validator
-    def _check_identity(cls, values):
-        if not values.get("email") and not values.get("username"):
+    @model_validator(mode="after")
+    def _check_identity(self):
+        if not self.email and not self.username:
             raise ValueError("email or username required")
-        return values
+        return self
 
 
 class AuthProfileUpdate(BaseModel):
