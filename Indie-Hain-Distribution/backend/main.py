@@ -25,6 +25,7 @@ from .auth import (
     revoke_session_by_id,
     revoke_session_by_refresh,
     session_id_from_access_token,
+    revoke_sessions_for_user,
 )
 from .db import get_db, STORAGE_CHUNKS, STORAGE_APPS, ensure_schema
 from .models import (
@@ -212,6 +213,7 @@ def admin_reset_password(user_id: int, payload: AdminPasswordReset, user=Depends
     else:
         new_password = secrets.token_urlsafe(10)
     updated = set_user_password(user_id, new_password)
+    revoke_sessions_for_user(user_id)
     return {"user": updated, "password": new_password}
 
 
