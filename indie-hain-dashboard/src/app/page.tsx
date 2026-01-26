@@ -224,6 +224,25 @@ export default function Home() {
     }
   };
 
+  const updateUserRole = async (user: User, role: string) => {
+    if (!accessToken) return;
+    if (role === user.role) return;
+    setLoading(true);
+    try {
+      const res = await apiFetch(
+        `/api/admin/users/${user.id}/role`,
+        { method: "POST", body: JSON.stringify({ role }) },
+        { access: accessToken }
+      );
+      if (!res.ok) throw new Error("Rollen-Update fehlgeschlagen.");
+      await loadData();
+    } catch (err: any) {
+      setError(err.message || "Rollen-Update fehlgeschlagen.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const approveSubmission = async (submission: Submission, approve: boolean) => {
     if (!accessToken) return;
     setLoading(true);
@@ -358,7 +377,11 @@ export default function Home() {
               ) : null}
 
               {tab === "users" ? (
-                <UsersTable users={users} onReset={resetUserPassword} />
+                <UsersTable
+                  users={users}
+                  onReset={resetUserPassword}
+                  onRoleChange={updateUserRole}
+                />
               ) : null}
 
               {tab === "submissions" ? (
@@ -494,9 +517,11 @@ function LoginForm({
 function UsersTable({
   users,
   onReset,
+  onRoleChange,
 }: {
   users: User[];
   onReset: (user: User) => void;
+  onRoleChange: (user: User, role: string) => void;
 }) {
   return (
     <div className="mt-6 overflow-x-auto">
@@ -516,7 +541,17 @@ function UsersTable({
               <td className="py-3">{user.id}</td>
               <td className="py-3">{user.email}</td>
               <td className="py-3">{user.username || "-"}</td>
-              <td className="py-3 capitalize">{user.role}</td>
+              <td className="py-3">
+                <select
+                  value={user.role}
+                  onChange={(e) => onRoleChange(user, e.target.value)}
+                  className="rounded-full border border-[var(--stroke)] bg-[var(--bg-soft)] px-3 py-1 text-xs uppercase tracking-[0.2em] text-[var(--ink)]"
+                >
+                  <option value="user">user</option>
+                  <option value="dev">dev</option>
+                  <option value="admin">admin</option>
+                </select>
+              </td>
               <td className="py-3">
                 <button
                   onClick={() => onReset(user)}
