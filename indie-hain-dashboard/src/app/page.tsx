@@ -50,14 +50,41 @@ const REFRESH_KEY = "indie-hain-refresh";
 async function apiFetch(
   path: string,
   init: RequestInit = {},
-  tokens?: { access?: string; refresh?: string }
+  tokens?: { access?: string; refresh?: string },
+  allowRefresh = true
 ) {
   const headers = new Headers(init.headers || {});
-  if (tokens?.access) {
-    headers.set("Authorization", `Bearer ${tokens.access}`);
+  const access =
+    tokens?.access || (typeof window !== "undefined" ? localStorage.getItem(TOKEN_KEY) : null);
+  if (access) {
+    headers.set("Authorization", `Bearer ${access}`);
   }
-  headers.set("Content-Type", "application/json");
-  const res = await fetch(`${API_BASE}${path}`, { ...init, headers });
+  if (!headers.has("Content-Type")) {
+    headers.set("Content-Type", "application/json");
+  }
+  let res = await fetch(`${API_BASE}${path}`, { ...init, headers });
+  if (res.status === 401 && allowRefresh) {
+    const refresh =
+      tokens?.refresh || (typeof window !== "undefined" ? localStorage.getItem(REFRESH_KEY) : null);
+    if (refresh) {
+      const refreshed = await fetch(`${API_BASE}/api/auth/refresh`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ refresh_token: refresh }),
+      });
+      if (refreshed.ok) {
+        const data = await refreshed.json();
+        const newAccess = data.access_token;
+        const newRefresh = data.refresh_token;
+        if (typeof window !== "undefined") {
+          localStorage.setItem(TOKEN_KEY, newAccess);
+          localStorage.setItem(REFRESH_KEY, newRefresh);
+        }
+        headers.set("Authorization", `Bearer ${newAccess}`);
+        res = await fetch(`${API_BASE}${path}`, { ...init, headers });
+      }
+    }
+  }
   return res;
 }
 
