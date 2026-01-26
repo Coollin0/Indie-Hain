@@ -609,56 +609,122 @@ function SubmissionsTable({
   if (!submissions.length) {
     return <p className="mt-6 text-sm text-[var(--muted)]">Keine Anfragen.</p>;
   }
+  const pending = submissions.filter((s) => s.status === "pending");
+  const approved = submissions.filter((s) => s.status === "approved");
+  const rejected = submissions.filter((s) => s.status === "rejected");
   return (
-    <div className="mt-6 grid gap-4">
-      {submissions.map((submission) => (
-        <div
-          key={submission.id}
-          className="rounded-2xl border border-[var(--stroke)] bg-[var(--bg-soft)] p-4"
-        >
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <p className="text-sm font-semibold text-[var(--ink)]">
-                {submission.app_slug}
-              </p>
-              <p className="text-xs text-[var(--muted)]">
-                {submission.version} · {submission.platform} ·{" "}
-                {submission.channel}
-              </p>
-            </div>
-            <span
-              className={`rounded-full px-3 py-1 text-xs uppercase tracking-[0.2em] ${
-                submission.status === "pending"
-                  ? "bg-[rgba(128,240,184,0.15)] text-[var(--accent)]"
-                  : "bg-[rgba(90,212,255,0.15)] text-[var(--accent-2)]"
-              }`}
-            >
-              {submission.status}
-            </span>
-          </div>
-          <div className="mt-4 flex flex-wrap gap-2">
-            <button
-              onClick={() => onManifest(submission)}
-              className="rounded-full border border-[var(--stroke)] px-3 py-1 text-xs text-[var(--muted)] hover:border-[var(--accent)]"
-            >
-              Manifest
-            </button>
-            <button
-              onClick={() => onApprove(submission)}
-              className="rounded-full bg-[var(--accent)] px-3 py-1 text-xs font-semibold text-black"
-            >
-              Approve
-            </button>
-            <button
-              onClick={() => onReject(submission)}
-              className="rounded-full border border-[var(--danger)]/50 px-3 py-1 text-xs text-[var(--danger)]"
-            >
-              Reject
-            </button>
-          </div>
-        </div>
-      ))}
+    <div className="mt-6 grid gap-6">
+      <SubmissionSection
+        title="Offen"
+        items={pending}
+        tone="pending"
+        onApprove={onApprove}
+        onReject={onReject}
+        onManifest={onManifest}
+      />
+      <SubmissionSection
+        title="Approved"
+        items={approved}
+        tone="approved"
+        onApprove={onApprove}
+        onReject={onReject}
+        onManifest={onManifest}
+      />
+      <SubmissionSection
+        title="Rejected"
+        items={rejected}
+        tone="rejected"
+        onApprove={onApprove}
+        onReject={onReject}
+        onManifest={onManifest}
+      />
     </div>
+  );
+}
+
+function SubmissionSection({
+  title,
+  items,
+  tone,
+  onApprove,
+  onReject,
+  onManifest,
+}: {
+  title: string;
+  items: Submission[];
+  tone: "pending" | "approved" | "rejected";
+  onApprove: (submission: Submission) => void;
+  onReject: (submission: Submission) => void;
+  onManifest: (submission: Submission) => void;
+}) {
+  return (
+    <section className="space-y-3">
+      <div className="flex items-center justify-between">
+        <h3 className="text-sm uppercase tracking-[0.3em] text-[var(--muted)]">
+          {title}
+        </h3>
+        <span className="text-xs text-[var(--muted)]">{items.length}</span>
+      </div>
+      {items.length === 0 ? (
+        <p className="text-sm text-[var(--muted)]">Keine Einträge.</p>
+      ) : (
+        <div className="grid gap-4">
+          {items.map((submission) => (
+            <div
+              key={submission.id}
+              className="rounded-2xl border border-[var(--stroke)] bg-[var(--bg-soft)] p-4"
+            >
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <p className="text-sm font-semibold text-[var(--ink)]">
+                    {submission.app_slug}
+                  </p>
+                  <p className="text-xs text-[var(--muted)]">
+                    {submission.version} · {submission.platform} ·{" "}
+                    {submission.channel}
+                  </p>
+                </div>
+                <span
+                  className={`rounded-full px-3 py-1 text-xs uppercase tracking-[0.2em] ${
+                    tone === "pending"
+                      ? "bg-[rgba(128,240,184,0.15)] text-[var(--accent)]"
+                      : tone === "approved"
+                      ? "bg-[rgba(90,212,255,0.15)] text-[var(--accent-2)]"
+                      : "bg-[rgba(255,107,107,0.15)] text-[var(--danger)]"
+                  }`}
+                >
+                  {submission.status}
+                </span>
+              </div>
+              <div className="mt-4 flex flex-wrap gap-2">
+                <button
+                  onClick={() => onManifest(submission)}
+                  className="rounded-full border border-[var(--stroke)] px-3 py-1 text-xs text-[var(--muted)] hover:border-[var(--accent)]"
+                >
+                  Manifest
+                </button>
+                {tone !== "approved" ? (
+                  <button
+                    onClick={() => onApprove(submission)}
+                    className="rounded-full bg-[var(--accent)] px-3 py-1 text-xs font-semibold text-black"
+                  >
+                    Approve
+                  </button>
+                ) : null}
+                {tone !== "rejected" ? (
+                  <button
+                    onClick={() => onReject(submission)}
+                    className="rounded-full border border-[var(--danger)]/50 px-3 py-1 text-xs text-[var(--danger)]"
+                  >
+                    Reject
+                  </button>
+                ) : null}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </section>
   );
 }
 
