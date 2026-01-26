@@ -22,6 +22,9 @@ from .auth import (
     set_role_by_id,
     update_avatar_url,
     set_user_password,
+    set_temp_password,
+    clear_temp_password,
+    verify_temp_password,
     revoke_session_by_id,
     revoke_session_by_refresh,
     session_id_from_access_token,
@@ -41,6 +44,7 @@ from .models import (
     AuthBootstrap,
     AuthRefresh,
     AuthLogout,
+    AuthResetPassword,
     AdminRoleUpdate,
     AdminPasswordReset,
 )
@@ -74,6 +78,25 @@ admin = APIRouter(prefix="/api/admin", tags=["admin"])
 public = APIRouter(prefix="/api/public", tags=["public"])
 
 
+def _user_for_reset(identity: str, by_username: bool) -> dict | None:
+    if not identity:
+        return None
+    with get_db() as db:
+        if by_username:
+            row = db.execute(
+                "SELECT id FROM users WHERE lower(username) = lower(?)",
+                (identity.strip(),),
+            ).fetchone()
+        else:
+            row = db.execute(
+                "SELECT id FROM users WHERE email = ?",
+                (identity.strip().lower(),),
+            ).fetchone()
+    if not row:
+        return None
+    return {"id": int(row["id"])}
+
+
 # ===============================
 # Auth API
 # ===============================
@@ -93,6 +116,8 @@ def auth_login(payload: AuthLogin):
         user = authenticate_username(payload.username, payload.password)
     if not user:
         raise HTTPException(401, "Invalid credentials")
+    if user.get("must_reset_password"):
+        raise HTTPException(403, "PASSWORD_RESET_REQUIRED")
     return issue_tokens(user, payload.device_id)
 
 
@@ -146,6 +171,22 @@ def auth_logout(payload: AuthLogout, authorization: str | None = Header(default=
     raise HTTPException(400, "Missing session")
 
 
+@app.post("/api/auth/reset-password")
+def auth_reset_password(payload: AuthResetPassword):
+    if payload.email:
+        u = _user_for_reset(payload.email, by_username=False)
+    else:
+        u = _user_for_reset(payload.username or "", by_username=True)
+    if not u:
+        raise HTTPException(401, "Invalid credentials")
+    if not verify_temp_password(u["id"], payload.temp_password):
+        raise HTTPException(401, "Invalid credentials")
+    set_user_password(u["id"], payload.new_password)
+    clear_temp_password(u["id"])
+    revoke_sessions_for_user(u["id"])
+    return {"ok": True}
+
+
 @app.post("/api/auth/avatar")
 async def auth_avatar(
     file: UploadFile = File(...),
@@ -182,7 +223,12 @@ def health():
 def admin_list_users(user=Depends(require_admin)):
     with get_db() as db:
         rows = db.execute(
-            "SELECT id, email, role, username, avatar_url, created_at FROM users ORDER BY created_at DESC"
+            """
+            SELECT id, email, role, username, avatar_url, created_at,
+                   temp_password_plain, force_password_reset
+            FROM users
+            ORDER BY created_at DESC
+            """
         ).fetchall()
     items = []
     for r in rows:
@@ -193,6 +239,8 @@ def admin_list_users(user=Depends(require_admin)):
             "username": r["username"] or "",
             "avatar_url": r["avatar_url"] or "",
             "created_at": r["created_at"],
+            "temp_password": r["temp_password_plain"] or "",
+            "force_password_reset": int(r["force_password_reset"] or 0),
         })
     return {"items": items}
 
@@ -212,7 +260,7 @@ def admin_reset_password(user_id: int, payload: AdminPasswordReset, user=Depends
         new_password = payload.password
     else:
         new_password = secrets.token_urlsafe(10)
-    updated = set_user_password(user_id, new_password)
+    updated = set_temp_password(user_id, new_password)
     revoke_sessions_for_user(user_id)
     return {"user": updated, "password": new_password}
 

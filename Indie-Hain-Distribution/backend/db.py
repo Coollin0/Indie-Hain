@@ -101,6 +101,14 @@ def ensure_schema():
             db.execute("ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'user'")
         if "created_at" not in user_cols:
             db.execute("ALTER TABLE users ADD COLUMN created_at TEXT")
+        if "temp_password_hash" not in user_cols:
+            db.execute("ALTER TABLE users ADD COLUMN temp_password_hash TEXT")
+        if "temp_password_plain" not in user_cols:
+            db.execute("ALTER TABLE users ADD COLUMN temp_password_plain TEXT")
+        if "force_password_reset" not in user_cols:
+            db.execute(
+                "ALTER TABLE users ADD COLUMN force_password_reset INTEGER NOT NULL DEFAULT 0"
+            )
 
         db.execute(
             """

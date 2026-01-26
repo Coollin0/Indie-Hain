@@ -114,7 +114,11 @@ def _user_by_id(user_id: int) -> dict | None:
 def _user_by_email(email: str) -> dict | None:
     with get_db() as db:
         row = db.execute(
-            "SELECT id, email, role, username, avatar_url, password_hash FROM users WHERE email = ?",
+            """
+            SELECT id, email, role, username, avatar_url, password_hash,
+                   temp_password_hash, force_password_reset
+            FROM users WHERE email = ?
+            """,
             (email,),
         ).fetchone()
     if not row:
@@ -126,13 +130,19 @@ def _user_by_email(email: str) -> dict | None:
         "username": row["username"] or "",
         "avatar_url": row["avatar_url"] or "",
         "password_hash": row["password_hash"],
+        "temp_password_hash": row["temp_password_hash"],
+        "force_password_reset": int(row["force_password_reset"] or 0),
     }
 
 
 def _user_by_username(username: str) -> dict | None:
     with get_db() as db:
         row = db.execute(
-            "SELECT id, email, role, username, avatar_url, password_hash FROM users WHERE lower(username) = lower(?)",
+            """
+            SELECT id, email, role, username, avatar_url, password_hash,
+                   temp_password_hash, force_password_reset
+            FROM users WHERE lower(username) = lower(?)
+            """,
             (username,),
         ).fetchone()
     if not row:
@@ -144,6 +154,8 @@ def _user_by_username(username: str) -> dict | None:
         "username": row["username"] or "",
         "avatar_url": row["avatar_url"] or "",
         "password_hash": row["password_hash"],
+        "temp_password_hash": row["temp_password_hash"],
+        "force_password_reset": int(row["force_password_reset"] or 0),
     }
 
 def _issue_access_token(user: dict, session_id: str, device_id: str | None) -> str:
@@ -332,6 +344,18 @@ def authenticate(email: str, password: str) -> dict | None:
     user = _user_by_email(email)
     if not user:
         return None
+    if user.get("force_password_reset"):
+        tmp_hash = user.get("temp_password_hash")
+        if tmp_hash and _verify_password(password, tmp_hash):
+            return {
+                "id": int(user["id"]),
+                "email": user["email"],
+                "role": user["role"],
+                "username": user["username"],
+                "avatar_url": user["avatar_url"],
+                "must_reset_password": True,
+            }
+        return None
     if _verify_password(password, user["password_hash"]):
         return {
             "id": int(user["id"]),
@@ -347,6 +371,18 @@ def authenticate_username(username: str, password: str) -> dict | None:
     username = username.strip()
     user = _user_by_username(username)
     if not user:
+        return None
+    if user.get("force_password_reset"):
+        tmp_hash = user.get("temp_password_hash")
+        if tmp_hash and _verify_password(password, tmp_hash):
+            return {
+                "id": int(user["id"]),
+                "email": user["email"],
+                "role": user["role"],
+                "username": user["username"],
+                "avatar_url": user["avatar_url"],
+                "must_reset_password": True,
+            }
         return None
     if _verify_password(password, user["password_hash"]):
         return {
@@ -442,6 +478,54 @@ def set_user_password(user_id: int, new_password: str) -> dict:
     if not user:
         raise HTTPException(404, "user not found")
     return user
+
+
+def set_temp_password(user_id: int, temp_password: str) -> dict:
+    if not temp_password:
+        raise HTTPException(400, "temp password required")
+    ph = _hash_password(temp_password)
+    with get_db() as db:
+        db.execute(
+            """
+            UPDATE users
+            SET temp_password_hash = ?, temp_password_plain = ?, force_password_reset = 1
+            WHERE id = ?
+            """,
+            (ph, temp_password, int(user_id)),
+        )
+        db.commit()
+    user = _user_by_id(user_id)
+    if not user:
+        raise HTTPException(404, "user not found")
+    return user
+
+
+def clear_temp_password(user_id: int) -> dict:
+    with get_db() as db:
+        db.execute(
+            """
+            UPDATE users
+            SET temp_password_hash = NULL, temp_password_plain = NULL, force_password_reset = 0
+            WHERE id = ?
+            """,
+            (int(user_id),),
+        )
+        db.commit()
+    user = _user_by_id(user_id)
+    if not user:
+        raise HTTPException(404, "user not found")
+    return user
+
+
+def verify_temp_password(user_id: int, temp_password: str) -> bool:
+    with get_db() as db:
+        row = db.execute(
+            "SELECT temp_password_hash, force_password_reset FROM users WHERE id = ?",
+            (int(user_id),),
+        ).fetchone()
+    if not row or not row["force_password_reset"] or not row["temp_password_hash"]:
+        return False
+    return _verify_password(temp_password, row["temp_password_hash"])
 
 
 def get_user_from_headers(

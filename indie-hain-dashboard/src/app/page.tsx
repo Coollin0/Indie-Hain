@@ -12,6 +12,8 @@ type User = {
   role: string;
   username: string;
   avatar_url?: string;
+  temp_password?: string;
+  force_password_reset?: number;
 };
 
 type Submission = {
@@ -559,6 +561,7 @@ function UsersTable({
             <th className="pb-3">E-Mail</th>
             <th className="pb-3">Username</th>
             <th className="pb-3">Rolle</th>
+            <th className="pb-3">Temp PW</th>
             <th className="pb-3">Aktion</th>
           </tr>
         </thead>
@@ -578,6 +581,15 @@ function UsersTable({
                   <option value="dev">dev</option>
                   <option value="admin">admin</option>
                 </select>
+              </td>
+              <td className="py-3">
+                {user.temp_password ? (
+                  <span className="rounded-full border border-[var(--stroke)] bg-[var(--bg-soft)] px-3 py-1 text-xs text-[var(--ink)]">
+                    {user.temp_password}
+                  </span>
+                ) : (
+                  <span className="text-xs text-[var(--muted)]">—</span>
+                )}
               </td>
               <td className="py-3">
                 <button

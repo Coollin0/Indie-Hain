@@ -40,6 +40,19 @@ class AuthLogout(BaseModel):
     refresh_token: Optional[str] = None
 
 
+class AuthResetPassword(BaseModel):
+    email: Optional[str] = None
+    username: Optional[str] = None
+    temp_password: str
+    new_password: str
+
+    @model_validator(mode="after")
+    def _check_identity(self):
+        if not self.email and not self.username:
+            raise ValueError("email or username required")
+        return self
+
+
 class AdminRoleUpdate(BaseModel):
     role: str
 
