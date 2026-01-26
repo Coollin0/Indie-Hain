@@ -1,11 +1,12 @@
 # backend/main.py
 from fastapi import FastAPI, HTTPException, Body, Depends, APIRouter, UploadFile, File, Header
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from typing import Iterator, Optional
 from pathlib import Path
 from datetime import datetime
-import hashlib, json, io, zipfile, tempfile, os
+import hashlib, json, io, zipfile, tempfile, os, secrets
 
 from .auth import (
     require_dev,
@@ -20,6 +21,7 @@ from .auth import (
     set_role_by_email,
     set_role_by_id,
     update_avatar_url,
+    set_user_password,
     revoke_session_by_id,
     revoke_session_by_refresh,
     session_id_from_access_token,
@@ -39,12 +41,23 @@ from .models import (
     AuthRefresh,
     AuthLogout,
     AdminRoleUpdate,
+    AdminPasswordReset,
 )
 from pathlib import Path as _Path
 
 ensure_schema()
 
 app = FastAPI(title="Indie-Hain Distribution API")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "https://dashboard.indie-hain.corneliusgames.com",
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 _static = _Path(__file__).resolve().parent / "static"
 (_static / "covers").mkdir(parents=True, exist_ok=True)
@@ -190,6 +203,16 @@ def admin_set_role(user_id: int, payload: AdminRoleUpdate, user=Depends(require_
         raise HTTPException(400, "invalid role")
     updated = set_role_by_id(user_id, role, revoke_sessions=True)
     return {"user": updated}
+
+
+@admin.post("/users/{user_id}/reset-password")
+def admin_reset_password(user_id: int, payload: AdminPasswordReset, user=Depends(require_admin)):
+    if payload.password:
+        new_password = payload.password
+    else:
+        new_password = secrets.token_urlsafe(10)
+    updated = set_user_password(user_id, new_password)
+    return {"user": updated, "password": new_password}
 
 
 # ===============================

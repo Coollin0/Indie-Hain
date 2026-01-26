@@ -428,6 +428,22 @@ def update_avatar_url(user_id: int, avatar_url: str) -> dict:
     return user
 
 
+def set_user_password(user_id: int, new_password: str) -> dict:
+    if not new_password:
+        raise HTTPException(400, "password required")
+    ph = _hash_password(new_password)
+    with get_db() as db:
+        db.execute(
+            "UPDATE users SET password_hash = ? WHERE id = ?",
+            (ph, int(user_id)),
+        )
+        db.commit()
+    user = _user_by_id(user_id)
+    if not user:
+        raise HTTPException(404, "user not found")
+    return user
+
+
 def get_user_from_headers(
     authorization: str | None = Header(default=None),
 ):

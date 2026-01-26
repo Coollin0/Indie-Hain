@@ -44,6 +44,10 @@ class AdminRoleUpdate(BaseModel):
     role: str
 
 
+class AdminPasswordReset(BaseModel):
+    password: Optional[str] = None
+
+
 class AppCreate(BaseModel):
     slug: str
     title: str
