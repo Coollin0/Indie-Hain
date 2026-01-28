@@ -43,6 +43,7 @@ jobs:
           python -m PyInstaller -y IndieHain.spec
 
       - name: Write settings.json
+        shell: bash
         run: |
           mkdir -p Indie-Hain/dist
           echo '{"DIST_API":"https://indie-hain.corneliusgames.com"}' > Indie-Hain/dist/settings.json
