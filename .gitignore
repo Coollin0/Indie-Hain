@@ -15,6 +15,10 @@ Indie-Hain/Installed/
 # Distribution backend runtime artifacts
 Indie-Hain-Distribution/backend/indiehain.db
 Indie-Hain-Distribution/backend/storage/
+Indie-Hain-Distribution/indiehain.db
+
+# Dashboard local env
+indie-hain-dashboard/.env.local
 
 # Logs
 *.log

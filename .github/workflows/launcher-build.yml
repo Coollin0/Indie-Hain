@@ -1,0 +1,81 @@
+name: Build Launcher
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "Indie-Hain/**"
+      - ".github/workflows/launcher-build.yml"
+
+jobs:
+  build:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install Linux system deps
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgl1 libxkbcommon-x11-0
+
+      - name: Install Python deps
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install pyinstaller pyside6 requests
+
+      - name: Build (PyInstaller)
+        working-directory: Indie-Hain
+        run: |
+          python -m PyInstaller -y IndieHain.spec
+
+      - name: Write settings.json
+        run: |
+          mkdir -p Indie-Hain/dist
+          echo '{"DIST_API":"https://indie-hain.corneliusgames.com"}' > Indie-Hain/dist/settings.json
+
+      - name: Copy settings.json into app (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          cp Indie-Hain/dist/settings.json Indie-Hain/dist/IndieHain.app/Contents/Resources/settings.json
+
+      - name: Copy settings.json into app (Windows/Linux)
+        if: runner.os != 'macOS'
+        run: |
+          cp Indie-Hain/dist/settings.json Indie-Hain/dist/IndieHain/settings.json
+
+      - name: Zip (macOS)
+        if: runner.os == 'macOS'
+        working-directory: Indie-Hain/dist
+        run: |
+          ditto -c -k --sequesterRsrc --keepParent IndieHain.app IndieHain-mac.zip
+
+      - name: Zip (Windows)
+        if: runner.os == 'Windows'
+        shell: powershell
+        working-directory: Indie-Hain/dist
+        run: |
+          Compress-Archive -Path IndieHain -DestinationPath IndieHain-win.zip
+
+      - name: Zip (Linux)
+        if: runner.os == 'Linux'
+        working-directory: Indie-Hain/dist
+        run: |
+          zip -r IndieHain-linux.zip IndieHain
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: IndieHain-${{ runner.os }}
+          path: Indie-Hain/dist/IndieHain-*.zip
