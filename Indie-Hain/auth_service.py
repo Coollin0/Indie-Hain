@@ -18,6 +18,10 @@ class User:
     access_token: Optional[str] = None
 
 
+class PasswordResetRequired(Exception):
+    pass
+
+
 class AuthService:
     def __init__(self, base_url: Optional[str] = None):
         self.base_url = (base_url or api_base()).rstrip("/")
@@ -106,19 +110,59 @@ class AuthService:
                 user = updated
         return user
 
-    def login(self, email: str, password: str) -> Optional[User]:
+    def login(self, identity: str, password: str) -> Optional[User]:
         device_id = self._ensure_device_id()
+        payload = {"password": password, "device_id": device_id}
+        if "@" in (identity or ""):
+            payload["email"] = identity
+        else:
+            payload["username"] = identity
         r = requests.post(
             f"{self.base_url}/api/auth/login",
-            json={"email": email, "password": password, "device_id": device_id},
+            json=payload,
             timeout=20,
         )
+        if r.status_code == 403:
+            try:
+                detail = r.json().get("detail")
+            except Exception:
+                detail = ""
+            if detail == "PASSWORD_RESET_REQUIRED":
+                raise PasswordResetRequired()
         if r.status_code == 401:
             return None
+        if r.status_code in (400, 422) and "username" in payload:
+            r = requests.post(
+                f"{self.base_url}/api/auth/login",
+                json={"email": identity, "password": password, "device_id": device_id},
+                timeout=20,
+            )
+            if r.status_code == 403:
+                try:
+                    detail = r.json().get("detail")
+                except Exception:
+                    detail = ""
+                if detail == "PASSWORD_RESET_REQUIRED":
+                    raise PasswordResetRequired()
+            if r.status_code == 401:
+                return None
         r.raise_for_status()
         data = r.json()
         self._set_tokens(data.get("access_token"), data.get("refresh_token"))
         return self._user_from_payload(data.get("user", {}))
+
+    def reset_password(self, identity: str, temp_password: str, new_password: str) -> None:
+        payload = {"temp_password": temp_password, "new_password": new_password}
+        if "@" in (identity or ""):
+            payload["email"] = identity
+        else:
+            payload["username"] = identity
+        r = requests.post(
+            f"{self.base_url}/api/auth/reset-password",
+            json=payload,
+            timeout=20,
+        )
+        r.raise_for_status()
 
     def refresh(self) -> Optional[User]:
         if not self._refresh_token:

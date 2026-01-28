@@ -17,7 +17,6 @@ from pages.shop_page import ShopPage
 from pages.cart_page import CartPage
 from pages.library_page import LibraryPage
 from pages.profile_page import ProfilePage
-from pages.admin_page import AdminPage
 from pages.game_info_page import GameInfoPage
 from pages.game_upload_page import GameUploadPage
 from pages.dev_games_page import DevGamesPage
@@ -125,10 +124,8 @@ class Main(QMainWindow):
         self.cart_page = CartPage()
         self.library_page = LibraryPage()
         self.profile_page = ProfilePage()
-        self.admin_page = AdminPage()
         self.game_info_page = GameInfoPage()
         self.game_upload_page = GameUploadPage()
-        self.admin_requests_page = None  # Lazy: wird erst beim Öffnen erzeugt
         self.dev_games_page = DevGamesPage()   # NEU
          # DevGames: Buttons verdrahten
         self.dev_games_page.edit_requested.connect(self._on_dev_edit_requested)
@@ -136,7 +133,7 @@ class Main(QMainWindow):
 
 
         self.stack.addWidget(self.game_upload_page)
-        self.game_upload_page.back_requested.connect(lambda: self.show_page("Profile"))
+        self.game_upload_page.back_requested.connect(lambda: self.show_page("DevGames"))
 
         # Signale
         self.shop_page.add_to_cart.connect(self.add_to_cart)
@@ -144,7 +141,7 @@ class Main(QMainWindow):
             self.shop_page.remove_from_cart.connect(self.remove_from_cart)
         self.cart_page.remove_requested.connect(self._on_cart_remove_requested)
         self.cart_page.checkout_requested.connect(self.checkout)
-        self.profile_page.game_upload_requested.connect(lambda: self._open_upload_page())
+        self.dev_games_page.upload_requested.connect(lambda: self._open_upload_page())
 
         # Detailseite
         self.shop_page.game_clicked.connect(self.open_game_from_shop)
@@ -156,9 +153,6 @@ class Main(QMainWindow):
             self.cart_page.go_to_profile.connect(lambda: (self.uncheck_nav(), self.show_page("Profile")))
         if hasattr(self.library_page, "go_to_profile"):
             self.library_page.go_to_profile.connect(lambda: (self.uncheck_nav(), self.show_page("Profile")))
-        if hasattr(self.admin_page, "go_to_profile"):
-            self.admin_page.go_to_profile.connect(lambda: (self.uncheck_nav(), self.show_page("Profile")))
-
         self.profile_page.logged_in.connect(self._on_auth_changed)
         self.profile_page.role_changed.connect(self._on_auth_changed)
         if hasattr(self.profile_page, "profile_updated"):
@@ -170,11 +164,10 @@ class Main(QMainWindow):
             "Library": self.library_page,
             "Indie-Verse": SimplePage("🌌 Indie-Verse"),
             "Profile": self.profile_page,
-            "Admin": self.admin_page,
             "Cart": self.cart_page,
             "DevGames": self.dev_games_page,   # NEU
         }
-        for name in ("Shop", "Library", "Indie-Verse", "Profile", "Admin", "Cart", "DevGames"):
+        for name in ("Shop", "Library", "Indie-Verse", "Profile", "Cart", "DevGames"):
             self.stack.addWidget(self.pages[name])
 
 
@@ -217,7 +210,7 @@ class Main(QMainWindow):
 
         self.group = QActionGroup(self); self.group.setExclusive(True)
         self.actions: dict[str, QAction] = {}
-        for name in ("Shop", "Library", "Indie-Verse", "Profile", "Admin"):
+        for name in ("Shop", "Library", "Indie-Verse", "Profile"):
             act = QAction(name, self); act.setCheckable(True)
             tb.addAction(act); self.group.addAction(act); self.actions[name] = act
             act.triggered.connect(lambda _, n=name: self.show_page(n))
@@ -239,13 +232,6 @@ class Main(QMainWindow):
         right_spacer = QWidget(); right_spacer.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         tb.addWidget(right_spacer)
 
-        # --- Admin-only: Game Anfragen (Toolbar) ---
-        self.admin_requests_action = QAction("Game Anfragen", self)
-        self.admin_requests_action.setCheckable(False)
-        self.admin_requests_action.triggered.connect(self._open_admin_requests)
-        tb.addAction(self.admin_requests_action)
-        self.admin_requests_action.setVisible(False)  # initial versteckt
-
         # Warenkorb rechts
         self.cart_btn = CartButton(icon_path="assets/cart.png")
         cart_widget_action = QWidgetAction(self); cart_widget_action.setDefaultWidget(self.cart_btn)
@@ -254,8 +240,6 @@ class Main(QMainWindow):
         self.cart_btn.clicked.connect(lambda: (self.uncheck_nav(), self.show_page("Cart")))
         self.cart_btn.set_count(0)
 
-        # Sichtbarkeit Admin-/Dev-Tabs initial
-        self._sync_admin_tab_visibility()
         self._sync_dev_tab_visibility()
 
 
@@ -501,11 +485,9 @@ class Main(QMainWindow):
 
         if hasattr(self.cart_page, "refresh_gate"): self.cart_page.refresh_gate()
         if hasattr(self.library_page, "refresh_gate"): self.library_page.refresh_gate()
-        if hasattr(self.admin_page, "refresh_gate"): self.admin_page.refresh_gate()
         if hasattr(self.shop_page, "refresh"): self.shop_page.refresh()
 
         self._sync_profile_chip()
-        self._sync_admin_tab_visibility()
         self._sync_dev_tab_visibility()
         self.profile_page.refresh()
 
@@ -529,13 +511,6 @@ class Main(QMainWindow):
         else:
             self.profile_widget_action.setVisible(False)
             if "Profile" in self.actions: self.actions["Profile"].setVisible(True)
-
-    def _sync_admin_tab_visibility(self):
-        is_admin = store.has_role("admin")
-        if "Admin" in self.actions:
-            self.actions["Admin"].setVisible(is_admin)
-        if hasattr(self, "admin_requests_action"):
-            self.admin_requests_action.setVisible(is_admin)
 
     def _sync_dev_tab_visibility(self):
         is_dev = store.has_role("dev") or store.has_role("admin")
@@ -565,14 +540,12 @@ class Main(QMainWindow):
             store.save_session()
             self._sync_profile_chip()
             self.profile_page.refresh()
-            self._sync_admin_tab_visibility()
             self._sync_dev_tab_visibility()
         else:
             store.session.current_user = None
             store.clear_session()
             self._sync_profile_chip()
             self.profile_page.refresh()
-            self._sync_admin_tab_visibility()
             self._sync_dev_tab_visibility()
 
 
@@ -714,10 +687,6 @@ class Main(QMainWindow):
 
 
     def show_page(self, name: str):
-        if name == "Admin" and not store.has_role("admin"):
-            self.uncheck_nav(); self.show_page("Profile")
-            self.statusBar().showMessage("Admin-Rechte erforderlich.", 2000); return
-
         if name == "DevGames":
             if not (store.has_role("dev") or store.has_role("admin")):
                 self.uncheck_nav()
@@ -879,23 +848,6 @@ class Main(QMainWindow):
     def _open_upload_page(self):
         self.stack.setCurrentWidget(self.game_upload_page)
         self.statusBar().showMessage("Game Upload", 1500)
-
-    # ----- Admin Requests öffnen -----
-    def _open_admin_requests(self):
-        try:
-            from pages.admin_requests_page import AdminRequestsPage
-        except Exception as e:
-            self.statusBar().showMessage(f"AdminRequestsPage fehlt: {e}", 4000)
-            return
-
-        if self.admin_requests_page is None:
-            self.admin_requests_page = AdminRequestsPage()
-            self.admin_requests_page.refreshed.connect(self._refresh_shop)
-            self.stack.addWidget(self.admin_requests_page)
-
-        self.uncheck_nav()
-        self.stack.setCurrentWidget(self.admin_requests_page)
-        self.statusBar().showMessage("Game Anfragen geöffnet", 1500)
 
     def _refresh_shop(self):
         if hasattr(self.shop_page, "refresh"):

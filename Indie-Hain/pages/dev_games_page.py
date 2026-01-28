@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (
 class DevGamesPage(QWidget):
     edit_requested = Signal(dict)       # später für Edit-Dialog
     buyers_requested = Signal(dict)     # später für Käuferliste
+    upload_requested = Signal()
 
     CARD_W = 230
     CARD_H = 180
@@ -23,10 +24,18 @@ class DevGamesPage(QWidget):
         outer.setContentsMargins(32, 24, 32, 24)
         outer.setSpacing(16)
 
+        title_row = QHBoxLayout()
         title = QLabel("🛠️  Deine Games")
         title.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
         title.setStyleSheet("font-size: 26px; font-weight: 600; color: #f0f0f0;")
-        outer.addWidget(title)
+        title_row.addWidget(title)
+        title_row.addStretch(1)
+
+        self.btn_upload = QPushButton("Game Upload")
+        self.btn_upload.setCursor(Qt.PointingHandCursor)
+        self.btn_upload.clicked.connect(self.upload_requested.emit)
+        title_row.addWidget(self.btn_upload)
+        outer.addLayout(title_row)
 
         self.info_lbl = QLabel("Hier siehst du alle Games, die du als Dev hochgeladen hast.")
         self.info_lbl.setStyleSheet("font-size: 13px; color: #b0b0b0;")

@@ -2,7 +2,9 @@ from __future__ import annotations
 from typing import List, Dict, Any
 import requests
 
-from .uploader_client import API, _headers
+from services.env import api_base
+
+API = api_base()
 
 
 def list_public_games() -> List[Dict[str, Any]]:

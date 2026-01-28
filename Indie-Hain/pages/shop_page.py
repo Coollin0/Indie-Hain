@@ -9,7 +9,7 @@ from PySide6.QtCore import (
 from PySide6.QtGui import QIcon, QPixmap
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QScrollArea, QFrame, QGridLayout, QToolButton,
-    QLabel, QHBoxLayout, QSizePolicy, QGraphicsOpacityEffect
+    QLabel, QHBoxLayout, QSizePolicy, QGraphicsOpacityEffect, QPushButton
 )
 
 from shiboken6 import isValid as qt_is_valid
@@ -42,9 +42,27 @@ class ShopPage(QWidget):
         root.setContentsMargins(24, 16, 24, 16)
         root.setSpacing(12)
 
+        header_row = QHBoxLayout()
+        header_row.setContentsMargins(0, 0, 0, 0)
+
         header = QLabel("🛒 Indie-Hain Shop", alignment=Qt.AlignHCenter)
         header.setStyleSheet("font-size:26px; font-weight:700; margin:8px 0 6px;")
-        root.addWidget(header)
+        header_row.addStretch(1)
+        header_row.addWidget(header, 0, Qt.AlignHCenter)
+        header_row.addStretch(1)
+
+        self.btn_reload = QPushButton("Reload")
+        self.btn_reload.setCursor(Qt.PointingHandCursor)
+        self.btn_reload.setFixedHeight(30)
+        self.btn_reload.setStyleSheet(
+            "QPushButton{background:#2b2b2b;color:#fff;border-radius:10px;padding:0 14px;font-weight:600;}"
+            "QPushButton:hover{background:#3a3a3a;}"
+            "QPushButton:pressed{background:#1f1f1f;}"
+        )
+        self.btn_reload.clicked.connect(self.refresh)
+        header_row.addWidget(self.btn_reload, 0, Qt.AlignRight)
+
+        root.addLayout(header_row)
 
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(True)
@@ -66,6 +84,10 @@ class ShopPage(QWidget):
 
         self._img = NetImage(self)
         self.scroll.viewport().installEventFilter(self)
+
+        self._auto_timer = QTimer(self)
+        self._auto_timer.setInterval(30_000)  # 30s auto-refresh
+        self._auto_timer.timeout.connect(self.refresh)
 
         QTimer.singleShot(0, self.refresh)
 
@@ -96,6 +118,17 @@ class ShopPage(QWidget):
         if obj is self.scroll.viewport() and ev.type() == QEvent.Resize:
             self._relayout()
         return super().eventFilter(obj, ev)
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self.refresh()
+        if not self._auto_timer.isActive():
+            self._auto_timer.start()
+
+    def hideEvent(self, event):
+        super().hideEvent(event)
+        if self._auto_timer.isActive():
+            self._auto_timer.stop()
 
     # ---------- Kartenaufbau ----------
     def _build_cards(self):

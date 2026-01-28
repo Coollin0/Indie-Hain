@@ -260,7 +260,7 @@ class GameUploadPage(QWidget):
         QMessageBox.information(
             self,
             "Upload erfolgreich",
-            "Upload erfolgreich abgeschlossen.\nKlicke auf OK, um zum Profil zurückzukehren.",
+            "Upload erfolgreich abgeschlossen.\nKlicke auf OK, um zu Meine Games zurückzukehren.",
         )
         self._reset_form()
         self.back_requested.emit()

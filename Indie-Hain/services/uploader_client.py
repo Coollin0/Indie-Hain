@@ -1,9 +1,11 @@
 from __future__ import annotations
 from pathlib import Path
 from typing import Callable, Dict, Any, List
-import os, requests, hashlib
+import requests, hashlib
 
-API = os.environ.get("DIST_API", "http://127.0.0.1:8000")
+from services.env import api_base
+
+API = api_base()
 CHUNK_SIZE = 8 * 1024 * 1024  # 8 MB
 
 def _headers(role="dev") -> Dict[str, str]:

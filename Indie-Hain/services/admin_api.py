@@ -1,6 +1,8 @@
 # services/admin_api.py
-import os, requests
-API = os.environ.get("DIST_API", "http://127.0.0.1:8000")
+import requests
+from services.env import api_base
+
+API = api_base()
 
 def _hdrs():
     from data import store
