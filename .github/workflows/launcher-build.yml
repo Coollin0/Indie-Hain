@@ -3,6 +3,8 @@ name: Build Launcher
 on:
   workflow_dispatch:
   push:
+    tags:
+      - "v*"
     paths:
       - "Indie-Hain/**"
       - ".github/workflows/launcher-build.yml"
@@ -79,3 +81,20 @@ jobs:
         with:
           name: IndieHain-${{ runner.os }}
           path: Indie-Hain/dist/IndieHain-*.zip
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/**/IndieHain-*.zip
