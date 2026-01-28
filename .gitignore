@@ -27,4 +27,3 @@ indie-hain-dashboard/.env.local
 Indie-Hain/build/
 Indie-Hain/dist/
 Indie-Hain/.pyinstaller/
-Indie-Hain/*.spec
