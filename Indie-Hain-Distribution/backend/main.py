@@ -253,6 +253,34 @@ def admin_set_role(user_id: int, payload: AdminRoleUpdate, user=Depends(require_
     return {"user": updated}
 
 
+@admin.delete("/users/{user_id}")
+def admin_delete_user(user_id: int, user=Depends(require_admin)):
+    uid = int(user_id)
+    if uid == int(user["user_id"]):
+        raise HTTPException(400, "cannot delete self")
+    with get_db() as db:
+        target = db.execute(
+            "SELECT id, role FROM users WHERE id=?",
+            (uid,),
+        ).fetchone()
+        if not target:
+            raise HTTPException(404, "user not found")
+        if (target["role"] or "user").lower() == "admin":
+            raise HTTPException(403, "cannot delete admin user")
+        owns = db.execute(
+            "SELECT COUNT(*) AS c FROM apps WHERE owner_user_id=?",
+            (uid,),
+        ).fetchone()
+        if owns and int(owns["c"]) > 0:
+            raise HTTPException(400, "user owns apps")
+        db.execute("DELETE FROM sessions WHERE user_id=?", (uid,))
+        db.execute("DELETE FROM purchases WHERE user_id=?", (uid,))
+        db.execute("DELETE FROM submissions WHERE user_id=?", (uid,))
+        db.execute("DELETE FROM users WHERE id=?", (uid,))
+        db.commit()
+    return {"ok": True}
+
+
 @admin.post("/users/{user_id}/reset-password")
 def admin_reset_password(user_id: int, payload: AdminPasswordReset, user=Depends(require_admin)):
     if payload.password:

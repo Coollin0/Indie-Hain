@@ -274,6 +274,25 @@ export default function Home() {
     }
   };
 
+  const deleteUser = async (user: User) => {
+    if (!accessToken) return;
+    if (!confirm(`User ${user.email} wirklich löschen?`)) return;
+    setLoading(true);
+    try {
+      const res = await apiFetch(
+        `/api/admin/users/${user.id}`,
+        { method: "DELETE" },
+        { access: accessToken }
+      );
+      if (!res.ok) throw new Error("User löschen fehlgeschlagen.");
+      await loadData();
+    } catch (err: any) {
+      setError(err.message || "User löschen fehlgeschlagen.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const approveSubmission = async (submission: Submission, approve: boolean) => {
     if (!accessToken) return;
     setLoading(true);
@@ -413,6 +432,7 @@ export default function Home() {
                   tempPasswords={tempPasswords}
                   onReset={resetUserPassword}
                   onRoleChange={updateUserRole}
+                  onDelete={deleteUser}
                 />
               ) : null}
 
@@ -551,11 +571,13 @@ function UsersTable({
   tempPasswords,
   onReset,
   onRoleChange,
+  onDelete,
 }: {
   users: User[];
   tempPasswords: Record<number, string>;
   onReset: (user: User) => void;
   onRoleChange: (user: User, role: string) => void;
+  onDelete: (user: User) => void;
 }) {
   return (
     <div className="mt-6 overflow-x-auto">
@@ -597,12 +619,20 @@ function UsersTable({
                 )}
               </td>
               <td className="py-3">
-                <button
-                  onClick={() => onReset(user)}
-                  className="rounded-full border border-[var(--stroke)] px-3 py-1 text-xs text-[var(--muted)] hover:border-[var(--accent)]"
-                >
-                  Passwort Reset
-                </button>
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    onClick={() => onReset(user)}
+                    className="rounded-full border border-[var(--stroke)] px-3 py-1 text-xs text-[var(--muted)] hover:border-[var(--accent)]"
+                  >
+                    Passwort Reset
+                  </button>
+                  <button
+                    onClick={() => onDelete(user)}
+                    className="rounded-full border border-[var(--danger)]/60 px-3 py-1 text-xs text-[var(--danger)] hover:bg-[var(--danger)]/10"
+                  >
+                    Löschen
+                  </button>
+                </div>
               </td>
             </tr>
           ))}
