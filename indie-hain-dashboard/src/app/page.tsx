@@ -12,7 +12,6 @@ type User = {
   role: string;
   username: string;
   avatar_url?: string;
-  temp_password?: string;
   force_password_reset?: number;
 };
 
@@ -57,7 +56,7 @@ async function apiFetch(
 ) {
   const headers = new Headers(init.headers || {});
   const access =
-    tokens?.access || (typeof window !== "undefined" ? localStorage.getItem(TOKEN_KEY) : null);
+    tokens?.access || (typeof window !== "undefined" ? sessionStorage.getItem(TOKEN_KEY) : null);
   if (access) {
     headers.set("Authorization", `Bearer ${access}`);
   }
@@ -67,7 +66,7 @@ async function apiFetch(
   let res = await fetch(`${API_BASE}${path}`, { ...init, headers });
   if (res.status === 401 && allowRefresh) {
     const refresh =
-      tokens?.refresh || (typeof window !== "undefined" ? localStorage.getItem(REFRESH_KEY) : null);
+      tokens?.refresh || (typeof window !== "undefined" ? sessionStorage.getItem(REFRESH_KEY) : null);
     if (refresh) {
       const refreshed = await fetch(`${API_BASE}/api/auth/refresh`, {
         method: "POST",
@@ -79,8 +78,8 @@ async function apiFetch(
         const newAccess = data.access_token;
         const newRefresh = data.refresh_token;
         if (typeof window !== "undefined") {
-          localStorage.setItem(TOKEN_KEY, newAccess);
-          localStorage.setItem(REFRESH_KEY, newRefresh);
+          sessionStorage.setItem(TOKEN_KEY, newAccess);
+          sessionStorage.setItem(REFRESH_KEY, newRefresh);
         }
         headers.set("Authorization", `Bearer ${newAccess}`);
         res = await fetch(`${API_BASE}${path}`, { ...init, headers });
@@ -106,12 +105,13 @@ export default function Home() {
     user: User;
     password: string;
   } | null>(null);
+  const [tempPasswords, setTempPasswords] = useState<Record<number, string>>({});
 
   const isAuthed = !!accessToken && !!me;
 
   useEffect(() => {
-    const storedAccess = localStorage.getItem(TOKEN_KEY);
-    const storedRefresh = localStorage.getItem(REFRESH_KEY);
+    const storedAccess = sessionStorage.getItem(TOKEN_KEY);
+    const storedRefresh = sessionStorage.getItem(REFRESH_KEY);
     if (storedAccess) {
       setAccessToken(storedAccess);
     }
@@ -214,8 +214,8 @@ export default function Home() {
       });
       if (!res.ok) throw new Error("Login fehlgeschlagen.");
       const data = await res.json();
-      localStorage.setItem(TOKEN_KEY, data.access_token);
-      localStorage.setItem(REFRESH_KEY, data.refresh_token);
+      sessionStorage.setItem(TOKEN_KEY, data.access_token);
+      sessionStorage.setItem(REFRESH_KEY, data.refresh_token);
       setAccessToken(data.access_token);
       setRefreshToken(data.refresh_token);
     } catch (err: any) {
@@ -229,8 +229,8 @@ export default function Home() {
     setAccessToken(null);
     setRefreshToken(null);
     setMe(null);
-    localStorage.removeItem(TOKEN_KEY);
-    localStorage.removeItem(REFRESH_KEY);
+    sessionStorage.removeItem(TOKEN_KEY);
+    sessionStorage.removeItem(REFRESH_KEY);
   };
 
   const resetUserPassword = async (user: User) => {
@@ -246,6 +246,8 @@ export default function Home() {
       if (!res.ok) throw new Error("Passwort-Reset fehlgeschlagen.");
       const data = await res.json();
       setResetPassword({ user, password: data.password });
+      setTempPasswords((prev) => ({ ...prev, [user.id]: data.password }));
+      await loadData();
     } catch (err: any) {
       setError(err.message || "Passwort-Reset fehlgeschlagen.");
     } finally {
@@ -408,6 +410,7 @@ export default function Home() {
               {tab === "users" ? (
                 <UsersTable
                   users={users}
+                  tempPasswords={tempPasswords}
                   onReset={resetUserPassword}
                   onRoleChange={updateUserRole}
                 />
@@ -545,10 +548,12 @@ function LoginForm({
 
 function UsersTable({
   users,
+  tempPasswords,
   onReset,
   onRoleChange,
 }: {
   users: User[];
+  tempPasswords: Record<number, string>;
   onReset: (user: User) => void;
   onRoleChange: (user: User, role: string) => void;
 }) {
@@ -583,9 +588,9 @@ function UsersTable({
                 </select>
               </td>
               <td className="py-3">
-                {user.temp_password ? (
+                {user.force_password_reset && tempPasswords[user.id] ? (
                   <span className="rounded-full border border-[var(--stroke)] bg-[var(--bg-soft)] px-3 py-1 text-xs text-[var(--ink)]">
-                    {user.temp_password}
+                    {tempPasswords[user.id]}
                   </span>
                 ) : (
                   <span className="text-xs text-[var(--muted)]">—</span>

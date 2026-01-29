@@ -6,7 +6,7 @@ from fastapi.staticfiles import StaticFiles
 from typing import Iterator, Optional
 from pathlib import Path
 from datetime import datetime
-import hashlib, json, io, zipfile, tempfile, os, secrets
+import hashlib, json, io, zipfile, tempfile, os, secrets, re
 
 from .auth import (
     require_dev,
@@ -225,7 +225,7 @@ def admin_list_users(user=Depends(require_admin)):
         rows = db.execute(
             """
             SELECT id, email, role, username, avatar_url, created_at,
-                   temp_password_plain, force_password_reset
+                   force_password_reset
             FROM users
             ORDER BY created_at DESC
             """
@@ -239,7 +239,6 @@ def admin_list_users(user=Depends(require_admin)):
             "username": r["username"] or "",
             "avatar_url": r["avatar_url"] or "",
             "created_at": r["created_at"],
-            "temp_password": r["temp_password_plain"] or "",
             "force_password_reset": int(r["force_password_reset"] or 0),
         })
     return {"items": items}
@@ -282,14 +281,81 @@ def _read_chunk_bytes(hash_hex: str) -> bytes:
         raise HTTPException(404, f"Chunk {hash_hex} missing")
     return p.read_bytes()
 
+SLUG_RE = re.compile(r"^[a-z0-9-]{1,64}$")
+COMP_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
+
+
+def _require_safe_slug(slug: str) -> str:
+    if not SLUG_RE.match(slug or ""):
+        raise HTTPException(400, "Invalid slug")
+    return slug
+
+
+def _require_safe_comp(value: str, field: str) -> str:
+    if not COMP_RE.match(value or ""):
+        raise HTTPException(400, f"Invalid {field}")
+    return value
+
+
+def _safe_resolve(base: Path, rel: Path) -> Path:
+    base_resolved = base.resolve()
+    target = (base / rel).resolve()
+    if not target.is_relative_to(base_resolved):
+        raise HTTPException(403, "Invalid path")
+    return target
+
 
 # ===============================
 # Developer API
 # ===============================
 
+def _require_app_owner_by_slug(slug: str, user_id: int) -> dict:
+    with get_db() as db:
+        row = db.execute(
+            "SELECT id, owner_user_id FROM apps WHERE slug=?",
+            (slug,),
+        ).fetchone()
+    if not row:
+        raise HTTPException(404, "App not found")
+    if int(row["owner_user_id"]) != int(user_id):
+        raise HTTPException(403, "Not your app")
+    return dict(row)
+
+
+def _require_app_owner_by_id(app_id: int, user_id: int) -> dict:
+    with get_db() as db:
+        row = db.execute(
+            "SELECT id, owner_user_id FROM apps WHERE id=?",
+            (int(app_id),),
+        ).fetchone()
+    if not row:
+        raise HTTPException(404, "App not found")
+    if int(row["owner_user_id"]) != int(user_id):
+        raise HTTPException(403, "Not your app")
+    return dict(row)
+
+
+def _require_build_owner(build_id: int, user_id: int) -> dict:
+    with get_db() as db:
+        row = db.execute(
+            """
+            SELECT b.id, b.app_id, a.owner_user_id
+            FROM builds b
+            JOIN apps a ON a.id=b.app_id
+            WHERE b.id=?
+            """,
+            (int(build_id),),
+        ).fetchone()
+    if not row:
+        raise HTTPException(404, "Build not found")
+    if int(row["owner_user_id"]) != int(user_id):
+        raise HTTPException(403, "Not your app")
+    return dict(row)
+
 # App anlegen
 @app.post("/api/dev/apps")
 async def create_app(payload: AppCreate, user: dict = Depends(require_dev)):
+    _require_safe_slug(payload.slug)
     with get_db() as db:
         db.execute(
             "INSERT INTO apps(slug,title,owner_user_id,created_at) VALUES(?,?,?,?)",
@@ -303,6 +369,8 @@ async def create_app(payload: AppCreate, user: dict = Depends(require_dev)):
 # App-Metadaten aktualisieren (Preis, Beschreibung, Cover, Rabatt)
 @app.post("/api/dev/apps/{slug}/meta")
 async def update_app_meta(slug: str, payload: AppMetaUpdate, user: dict = Depends(require_dev)):
+    _require_safe_slug(slug)
+    _require_app_owner_by_slug(slug, user["user_id"])
     with get_db() as db:
         row = db.execute("SELECT id FROM apps WHERE slug=?", (slug,)).fetchone()
         if not row:
@@ -349,6 +417,8 @@ async def upload_app_cover(
     file: UploadFile = File(...),
     user: dict = Depends(require_dev),
 ):
+    _require_safe_slug(slug)
+    _require_app_owner_by_slug(slug, user["user_id"])
     static_dir = Path(__file__).resolve().parent / "static" / "covers"
     static_dir.mkdir(parents=True, exist_ok=True)
     ext = Path(file.filename).suffix or ".jpg"
@@ -365,6 +435,10 @@ async def upload_app_cover(
 # Build anlegen
 @app.post("/api/dev/builds")
 async def create_build(payload: BuildCreate, user: dict = Depends(require_dev)):
+    _require_safe_comp(payload.version, "version")
+    _require_safe_comp(payload.platform, "platform")
+    _require_safe_comp(payload.channel, "channel")
+    _require_app_owner_by_id(payload.app_id, user["user_id"])
     with get_db() as db:
         row = db.execute("SELECT id FROM apps WHERE id=?", (payload.app_id,)).fetchone()
         if not row:
@@ -395,6 +469,7 @@ async def missing_chunks(
     req: MissingChunksRequest,
     user: dict = Depends(require_dev),
 ):
+    _require_build_owner(build_id, user["user_id"])
     missing = []
     for h in req.hashes:
         if not hex_shard(h).exists():
@@ -437,6 +512,11 @@ async def finalize_build(
     manifest: Manifest,
     user: dict = Depends(require_dev),
 ):
+    _require_safe_slug(manifest.app)
+    _require_safe_comp(manifest.version, "version")
+    _require_safe_comp(manifest.platform, "platform")
+    _require_safe_comp(manifest.channel, "channel")
+    _require_build_owner(build_id, user["user_id"])
     with get_db() as db:
         b = db.execute("SELECT * FROM builds WHERE id=?", (build_id,)).fetchone()
         if not b:
@@ -444,11 +524,13 @@ async def finalize_build(
         a = db.execute("SELECT * FROM apps WHERE id=?", (b["app_id"],)).fetchone()
         if not a:
             raise HTTPException(404, "App not found")
+        if manifest.app != a["slug"]:
+            raise HTTPException(400, "Manifest app mismatch")
 
     manifest_rel = Path(
         f"apps/{manifest.app}/builds/{manifest.version}/{manifest.platform}/{manifest.channel}/manifest.json"
     )
-    manifest_path = STORAGE_APPS.parent / manifest_rel
+    manifest_path = _safe_resolve(STORAGE_APPS.parent, manifest_rel)
     ensure_parent(manifest_path)
     manifest_path.write_text(
         json.dumps(manifest.dict(), ensure_ascii=False, indent=2), encoding="utf-8"
@@ -536,6 +618,13 @@ async def report_purchase(
 ):
     """Launcher meldet einen Kauf an den Distribution-Server."""
     with get_db() as db:
+        app = db.execute(
+            "SELECT price FROM apps WHERE id=?",
+            (int(payload.app_id),),
+        ).fetchone()
+        if not app:
+            raise HTTPException(404, "App not found")
+        server_price = float(app["price"] or 0.0)
         db.execute(
             """
             INSERT INTO purchases(app_id, user_id, price, purchased_at)
@@ -544,7 +633,7 @@ async def report_purchase(
             (
                 payload.app_id,
                 user["user_id"],
-                float(payload.price),
+                server_price,
                 datetime.utcnow().isoformat(),
             ),
         )
@@ -567,7 +656,8 @@ async def get_manifest(
     with get_db() as db:
         row = db.execute(
             """
-            SELECT b.manifest_url FROM builds b
+            SELECT b.manifest_url, a.id as app_id, a.owner_user_id, a.price
+            FROM builds b
             JOIN apps a ON a.id=b.app_id
             WHERE a.slug=? AND b.platform=? AND b.channel=? AND b.status='ready'
             ORDER BY b.id DESC LIMIT 1
@@ -576,8 +666,21 @@ async def get_manifest(
         ).fetchone()
         if not row:
             raise HTTPException(404, "No manifest")
+        # entitlement check: owner/admin, free app, or purchased
+        is_owner = int(row["owner_user_id"]) == int(user["user_id"])
+        is_admin = user.get("role") == "admin"
+        is_dev_owner = user.get("role") == "dev" and is_owner
+        price = float(row["price"] or 0.0)
+        has_access = is_admin or is_dev_owner or price <= 0.0
+        if not has_access:
+            purchase = db.execute(
+                "SELECT 1 FROM purchases WHERE app_id=? AND user_id=? LIMIT 1",
+                (int(row["app_id"]), int(user["user_id"])),
+            ).fetchone()
+            if not purchase:
+                raise HTTPException(403, "Purchase required")
 
-    manifest_path = STORAGE_APPS.parent / Path(row["manifest_url"])
+    manifest_path = _safe_resolve(STORAGE_APPS.parent, Path(row["manifest_url"]))
     if not manifest_path.exists():
         raise HTTPException(404, "Manifest missing on disk")
 
@@ -596,7 +699,7 @@ async def get_chunk(hash: str, user: dict = Depends(require_user)):
 
 @app.get("/storage/apps/{path:path}")
 async def get_storage_file(path: str, user: dict = Depends(require_user)):
-    p = STORAGE_APPS / path
+    p = _safe_resolve(STORAGE_APPS, Path(path))
     if not p.exists():
         raise HTTPException(404, "File not found")
     return FileResponse(p)
@@ -624,7 +727,7 @@ def get_submission_manifest(sid: int, user=Depends(require_admin)):
         s = db.execute("SELECT * FROM submissions WHERE id=?", (sid,)).fetchone()
         if not s:
             raise HTTPException(404, "Not found")
-    mpath = STORAGE_APPS.parent / s["manifest_url"]
+    mpath = _safe_resolve(STORAGE_APPS.parent, Path(s["manifest_url"]))
     return json.loads(mpath.read_text(encoding="utf-8"))
 
 

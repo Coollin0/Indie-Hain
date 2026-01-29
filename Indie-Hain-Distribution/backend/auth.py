@@ -18,15 +18,15 @@ REFRESH_TTL_DAYS = 30
 JWT_ALG = "HS256"
 
 
-def _secret(name: str, fallback: str) -> str:
+def _require_secret(name: str) -> str:
     val = os.environ.get(name)
-    if val:
-        return val
-    return fallback
+    if not val:
+        raise RuntimeError(f"{name} is required")
+    return val
 
 
-JWT_SECRET = _secret("JWT_SECRET", "dev-secret")
-REFRESH_SECRET = _secret("REFRESH_SECRET", JWT_SECRET)
+JWT_SECRET = _require_secret("JWT_SECRET")
+REFRESH_SECRET = os.environ.get("REFRESH_SECRET") or JWT_SECRET
 
 
 def _now() -> datetime:
@@ -488,10 +488,10 @@ def set_temp_password(user_id: int, temp_password: str) -> dict:
         db.execute(
             """
             UPDATE users
-            SET temp_password_hash = ?, temp_password_plain = ?, force_password_reset = 1
+            SET temp_password_hash = ?, temp_password_plain = NULL, force_password_reset = 1
             WHERE id = ?
             """,
-            (ph, temp_password, int(user_id)),
+            (ph, int(user_id)),
         )
         db.commit()
     user = _user_by_id(user_id)
