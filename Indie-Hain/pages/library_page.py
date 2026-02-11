@@ -16,6 +16,8 @@ class LibraryPage(QWidget):
     install_requested = Signal(dict)    # <- für gui.py erwartet
     start_requested = Signal(dict)      # ruft Starten auf (wenn installiert)
     uninstall_requested = Signal(dict)  # ruft Deinstallation auf
+    open_requested = Signal(dict)       # öffnet Installationsordner
+    rescan_requested = Signal()         # Library/Installationen neu scannen
 
     CARD_W = 180
     COVER_H = 240
@@ -32,9 +34,24 @@ class LibraryPage(QWidget):
         root.setContentsMargins(24, 16, 24, 16)
         root.setSpacing(12)
 
-        header = QLabel("📚 Deine Bibliothek", alignment=Qt.AlignHCenter)
+        header_row = QHBoxLayout()
+        header_row.setContentsMargins(0, 0, 0, 0)
+        header_row.setSpacing(12)
+
+        header = QLabel("📚 Deine Bibliothek")
+        header.setAlignment(Qt.AlignHCenter)
         header.setStyleSheet("font-size:26px; font-weight:700; margin:8px 0 6px;")
-        root.addWidget(header)
+        header_row.addWidget(header, 1)
+
+        self.btn_rescan = QPushButton("Rescan")
+        self.btn_rescan.setCursor(Qt.PointingHandCursor)
+        self.btn_rescan.setStyleSheet(
+            "QPushButton{padding:6px 12px;border-radius:10px;border:1px solid rgba(255,255,255,0.12);"
+            "color:#eaeaea;background:#1b1b1b;}"
+            "QPushButton:hover{border-color:rgba(255,255,255,0.28);}"
+        )
+        header_row.addWidget(self.btn_rescan, alignment=Qt.AlignRight)
+        root.addLayout(header_row)
 
         self.scroll = QScrollArea(); self.scroll.setWidgetResizable(True); self.scroll.setFrameShape(QFrame.NoFrame)
         root.addWidget(self.scroll, 1)
@@ -54,6 +71,7 @@ class LibraryPage(QWidget):
 
         self._img = NetImage(self)
         self.scroll.viewport().installEventFilter(self)
+        self.btn_rescan.clicked.connect(self.rescan_requested.emit)
 
     # API
     def set_items(self, items: List[Dict]):
@@ -165,11 +183,18 @@ class LibraryPage(QWidget):
         btn_uninstall.setEnabled(installed)
         btn_uninstall.clicked.connect(lambda _=None, g=game: self.uninstall_requested.emit(g))
 
+        btn_open = QPushButton("Ordner")
+        btn_open.setCursor(Qt.PointingHandCursor)
+        btn_open.setEnabled(installed)
+        btn_open.clicked.connect(lambda _=None, g=game: self.open_requested.emit(g))
+
         install_row = QHBoxLayout()
         install_row.setContentsMargins(0, 0, 0, 0)
         install_row.setSpacing(0)
         install_row.addStretch()
         install_row.addWidget(btn_install)
+        install_row.addSpacing(8)
+        install_row.addWidget(btn_open)
         install_row.addSpacing(8)
         install_row.addWidget(btn_uninstall)
         install_row.addStretch()

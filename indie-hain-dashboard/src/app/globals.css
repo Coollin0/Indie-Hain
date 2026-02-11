@@ -1,13 +1,14 @@
 @import "tailwindcss";
 
 :root {
-  --bg: #0b0e13;
-  --bg-elev: #12161d;
-  --bg-soft: #161b24;
-  --ink: #e8edf4;
-  --muted: #9aa5b1;
-  --accent: #80f0b8;
-  --accent-2: #5ad4ff;
+  --bg: #0a0c10;
+  --bg-elev: #121620;
+  --bg-soft: #171d28;
+  --ink: #e6edf6;
+  --muted: #9aa7b5;
+  --accent: #8af0b6;
+  --accent-2: #58c8ff;
+  --accent-warm: #f0c66b;
   --danger: #ff6b6b;
   --stroke: rgba(255, 255, 255, 0.08);
   --font-sans: var(--font-space);
@@ -37,9 +38,44 @@ body {
       rgba(128, 240, 184, 0.1),
       transparent 60%
     ),
+    radial-gradient(
+      800px 400px at 50% 110%,
+      rgba(240, 198, 107, 0.08),
+      transparent 60%
+    ),
     var(--bg);
   color: var(--ink);
   font-family: var(--font-sans), system-ui, -apple-system, sans-serif;
+}
+
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(
+      120deg,
+      rgba(138, 240, 182, 0.08),
+      transparent 40%
+    ),
+    linear-gradient(220deg, rgba(88, 200, 255, 0.1), transparent 45%);
+  opacity: 0.8;
+  z-index: -2;
+}
+
+body::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  background-image: linear-gradient(
+      rgba(255, 255, 255, 0.04) 1px,
+      transparent 1px
+    ),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.04) 1px, transparent 1px);
+  background-size: 120px 120px;
+  opacity: 0.15;
+  z-index: -1;
 }
 
 .glass {
@@ -52,4 +88,8 @@ body {
   background: var(--bg-elev);
   border: 1px solid var(--stroke);
   box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
+}
+
+input::placeholder {
+  color: rgba(154, 167, 181, 0.6);
 }

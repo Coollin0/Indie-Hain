@@ -16,10 +16,6 @@ from services.env import (
     install_root,
     update_settings,
     add_legacy_install_dir,
-    legacy_install_dir_settings,
-    missing_legacy_install_dirs,
-    remove_legacy_install_dir,
-    clear_legacy_install_dirs,
 )
 from auth_service import PasswordResetRequired
 
@@ -209,35 +205,6 @@ class ProfilePage(QWidget):
         local_btn_row.addStretch(1)
         profile_lay.addLayout(local_btn_row)
 
-        legacy_sep = QFrame()
-        legacy_sep.setFrameShape(QFrame.HLine)
-        profile_lay.addWidget(legacy_sep)
-
-        legacy_title = QLabel("Legacy-Installationsordner")
-        legacy_title.setStyleSheet("font-size: 14px; font-weight: 600;")
-        profile_lay.addWidget(legacy_title)
-
-        self.legacy_hint = QLabel("")
-        self.legacy_hint.setStyleSheet("font-size: 12px; color: #bbb;")
-        self.legacy_hint.setWordWrap(True)
-        profile_lay.addWidget(self.legacy_hint)
-
-        self.legacy_list = QWidget()
-        self.legacy_list_layout = QVBoxLayout(self.legacy_list)
-        self.legacy_list_layout.setContentsMargins(0, 0, 0, 0)
-        self.legacy_list_layout.setSpacing(6)
-        profile_lay.addWidget(self.legacy_list)
-
-        legacy_btn_row = QHBoxLayout()
-        self.btn_remove_missing_legacy = QPushButton("Fehlende entfernen")
-        self.btn_remove_missing_legacy.setCursor(Qt.PointingHandCursor)
-        legacy_btn_row.addWidget(self.btn_remove_missing_legacy)
-        self.btn_clear_legacy = QPushButton("Legacy-Liste leeren")
-        self.btn_clear_legacy.setCursor(Qt.PointingHandCursor)
-        legacy_btn_row.addWidget(self.btn_clear_legacy)
-        legacy_btn_row.addStretch(1)
-        profile_lay.addLayout(legacy_btn_row)
-
         lay.addWidget(self.profile_box)
 
         # Events
@@ -253,8 +220,6 @@ class ProfilePage(QWidget):
         self.btn_open_installs.clicked.connect(self._open_install_dir)
         self.btn_change_installs.clicked.connect(self._change_install_dir)
         self.btn_reset_local.clicked.connect(self._reset_local_data)
-        self.btn_clear_legacy.clicked.connect(self._clear_legacy_dirs)
-        self.btn_remove_missing_legacy.clicked.connect(self._remove_missing_legacy_dirs)
 
         lay.addStretch(1)
 
@@ -318,66 +283,12 @@ class ProfilePage(QWidget):
         self.local_api_lbl.setText(api_base())
         self.local_path_lbl.setText(str(data_root()))
         self.local_install_lbl.setText(str(install_root()))
-        self._refresh_legacy_install_dirs()
-
-    def _refresh_legacy_install_dirs(self):
-        while self.legacy_list_layout.count():
-            item = self.legacy_list_layout.takeAt(0)
-            widget = item.widget()
-            if widget:
-                widget.deleteLater()
-
-        legacy_dirs = legacy_install_dir_settings()
-        missing_dirs = missing_legacy_install_dirs()
-        if not legacy_dirs:
-            self.legacy_hint.setText("Keine gespeicherten Legacy-Pfade.")
-            empty = QLabel("Keine Legacy-Installationen hinterlegt.")
-            empty.setStyleSheet("font-size: 12px; color: #aaa;")
-            self.legacy_list_layout.addWidget(empty)
-            self.btn_clear_legacy.setEnabled(False)
-            self.btn_remove_missing_legacy.setEnabled(False)
-            return
-
-        hint = "Diese Pfade werden zusätzlich nach bestehenden Installationen durchsucht."
-        if missing_dirs:
-            hint = f"{hint} Hinweis: {len(missing_dirs)} Pfad(e) nicht gefunden."
-        self.legacy_hint.setText(hint)
-        self.btn_clear_legacy.setEnabled(True)
-        self.btn_remove_missing_legacy.setEnabled(bool(missing_dirs))
-        for path in legacy_dirs:
-            is_missing = path in missing_dirs
-            row = QWidget()
-            row_lay = QHBoxLayout(row)
-            row_lay.setContentsMargins(0, 0, 0, 0)
-            row_lay.setSpacing(8)
-
-            label = QLabel(path)
-            if is_missing:
-                label.setStyleSheet("color: #d9a0a0;")
-                label.setText(f"{path} (nicht gefunden)")
-            label.setTextInteractionFlags(Qt.TextSelectableByMouse)
-            btn_open = QPushButton("Öffnen")
-            btn_open.setCursor(Qt.PointingHandCursor)
-            btn_remove = QPushButton("Entfernen")
-            btn_remove.setCursor(Qt.PointingHandCursor)
-            btn_open.setEnabled(not is_missing)
-
-            btn_open.clicked.connect(lambda _=False, p=path: self._open_legacy_dir(p))
-            btn_remove.clicked.connect(lambda _=False, p=path: self._remove_legacy_dir(p))
-
-            row_lay.addWidget(label, 1)
-            row_lay.addWidget(btn_open)
-            row_lay.addWidget(btn_remove)
-            self.legacy_list_layout.addWidget(row)
 
     def _open_data_dir(self):
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(data_root())))
 
     def _open_install_dir(self):
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(install_root())))
-
-    def _open_legacy_dir(self, path: str):
-        QDesktopServices.openUrl(QUrl.fromLocalFile(path))
 
     def _change_install_dir(self):
         current = install_root()
@@ -470,53 +381,6 @@ class ProfilePage(QWidget):
         self._clear_profile_form()
         self._sync_state()
         QMessageBox.information(self, "Lokale Daten", "Lokale Daten wurden zurückgesetzt.")
-
-    def _remove_legacy_dir(self, path: str):
-        if not remove_legacy_install_dir(path):
-            QMessageBox.information(self, "Legacy-Installationen", "Pfad nicht gefunden oder bereits entfernt.")
-            return
-        self._refresh_legacy_install_dirs()
-        QMessageBox.information(self, "Legacy-Installationen", "Legacy-Pfad entfernt.")
-
-    def _clear_legacy_dirs(self):
-        if not legacy_install_dir_settings():
-            return
-        confirm = QMessageBox.question(
-            self,
-            "Legacy-Installationen",
-            "Alle Legacy-Installationspfade entfernen?\nBestehende Installationen bleiben erhalten.",
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.No,
-        )
-        if confirm != QMessageBox.Yes:
-            return
-        clear_legacy_install_dirs()
-        self._refresh_legacy_install_dirs()
-        QMessageBox.information(self, "Legacy-Installationen", "Legacy-Liste geleert.")
-
-    def _remove_missing_legacy_dirs(self):
-        missing = missing_legacy_install_dirs()
-        if not missing:
-            QMessageBox.information(self, "Legacy-Installationen", "Keine fehlenden Legacy-Pfade gefunden.")
-            return
-
-        confirm = QMessageBox.question(
-            self,
-            "Fehlende Legacy-Pfade entfernen",
-            f"{len(missing)} fehlende Legacy-Pfad(e) aus der Liste entfernen?",
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.No,
-        )
-        if confirm != QMessageBox.Yes:
-            return
-
-        removed_any = False
-        for path in missing:
-            removed_any = remove_legacy_install_dir(path) or removed_any
-
-        if removed_any:
-            self._refresh_legacy_install_dirs()
-            QMessageBox.information(self, "Legacy-Installationen", "Fehlende Pfade wurden entfernt.")
 
     def _set_mode(self, mode: str):
         self._mode = mode

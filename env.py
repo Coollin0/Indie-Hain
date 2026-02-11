@@ -104,30 +104,6 @@ def _settings_install_dir() -> str | None:
 def _settings_legacy_install_dirs() -> list[str]:
     return _settings_list(("LEGACY_INSTALL_DIRS", "legacy_install_dirs", "legacy_install_dir"))
 
-def legacy_install_dir_settings() -> list[str]:
-    return _settings_legacy_install_dirs()
-
-def missing_legacy_install_dirs() -> list[str]:
-    missing: list[str] = []
-    seen: set[str] = set()
-    for entry in _settings_legacy_install_dirs():
-        if not isinstance(entry, str):
-            continue
-        raw = entry.strip()
-        if not raw or raw in seen:
-            continue
-        seen.add(raw)
-        path = Path(raw).expanduser()
-        if not path.is_absolute():
-            path = data_root() / path
-        try:
-            exists = path.resolve().exists()
-        except Exception:
-            exists = path.exists()
-        if not exists:
-            missing.append(raw)
-    return missing
-
 def _resolve_install_dir(value: str) -> Path:
     path = Path(value).expanduser()
     if not path.is_absolute():
@@ -245,44 +221,6 @@ def add_legacy_install_dir(path: Path) -> None:
     if raw not in legacy:
         legacy.append(raw)
     update_settings({"legacy_install_dirs": legacy})
-
-def _normalize_legacy_value(value: str) -> str:
-    path = Path(value).expanduser()
-    if not path.is_absolute():
-        path = data_root() / path
-    try:
-        return str(path.resolve())
-    except Exception:
-        return str(path)
-
-def remove_legacy_install_dir(path: str | Path) -> bool:
-    raw = str(path) if isinstance(path, Path) else path
-    raw = raw.strip()
-    if not raw:
-        return False
-    settings_path = settings_write_path()
-    data = _load_settings(settings_path)
-    legacy = data.get("legacy_install_dirs")
-    if not isinstance(legacy, list):
-        return False
-    target_normalized = _normalize_legacy_value(raw)
-    filtered: list[str] = []
-    removed = False
-    for entry in legacy:
-        if not isinstance(entry, str):
-            continue
-        entry_raw = entry.strip()
-        entry_normalized = _normalize_legacy_value(entry_raw)
-        if entry_raw == raw or entry_normalized == target_normalized:
-            removed = True
-            continue
-        filtered.append(entry_raw)
-    if removed:
-        update_settings({"legacy_install_dirs": filtered})
-    return removed
-
-def clear_legacy_install_dirs() -> None:
-    update_settings({"legacy_install_dirs": []})
 
 def abs_url(u: str) -> str:
     if not u: return ""

@@ -10,8 +10,8 @@ from PySide6.QtWidgets import (
     QDoubleSpinBox, QSpinBox, QListWidget, QListWidgetItem
 )
 
-from PySide6.QtGui import QAction, QActionGroup, QIcon, QPixmap, QPainter, QPainterPath, QDesktopServices
-from PySide6.QtCore import Qt, QSize, Signal, QUrl
+from PySide6.QtGui import QAction, QActionGroup, QIcon, QPixmap, QPainter, QPainterPath
+from PySide6.QtCore import Qt, QSize, Signal
 
 from pages.shop_page import ShopPage
 from pages.cart_page import CartPage
@@ -176,10 +176,6 @@ class Main(QMainWindow):
             self.library_page.start_requested.connect(self._on_start_requested)
         if hasattr(self.library_page, "uninstall_requested"):
             self.library_page.uninstall_requested.connect(self._on_uninstall_requested)
-        if hasattr(self.library_page, "open_requested"):
-            self.library_page.open_requested.connect(self._on_library_open_requested)
-        if hasattr(self.library_page, "rescan_requested"):
-            self.library_page.rescan_requested.connect(self._on_library_rescan)
         self._install_thread = None
         self._install_worker = None
         self._install_focus_refresh()
@@ -330,21 +326,6 @@ class Main(QMainWindow):
         # 6) GameInfo synchronisieren
         self.game_info_page.set_cart_ids(self.cart_ids)
         self.game_info_page.set_owned_ids(self.owned_ids)
-
-    def _on_library_rescan(self):
-        self.statusBar().showMessage("Bibliothek wird aktualisiert…")
-        self._refresh_library_from_db()
-        self.statusBar().showMessage("Bibliothek aktualisiert", 4000)
-
-    def _on_library_open_requested(self, game: dict):
-        install_dir = str(game.get("install_dir") or "")
-        if not install_dir:
-            slug = str(game.get("slug") or self._slugify(game.get("title", "")))
-            install_dir = str(self._resolve_install_dir(slug))
-        if install_dir and Path(install_dir).exists():
-            QDesktopServices.openUrl(QUrl.fromLocalFile(install_dir))
-        else:
-            self.statusBar().showMessage("Installationsordner nicht gefunden.", 4000)
 
     def _resolve_install_dir(self, slug: str) -> Path:
         primary = install_root() / slug
