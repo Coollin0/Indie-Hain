@@ -437,6 +437,19 @@ async def upload_app_cover(
     return {"cover_url": cover_url}
 
 
+@app.post("/api/dev/apps/{slug}/unpublish")
+async def unpublish_app(slug: str, user: dict = Depends(require_dev)):
+    _require_safe_slug(slug)
+    _require_app_owner_by_slug(slug, user["user_id"])
+    with get_db() as db:
+        row = db.execute("SELECT id FROM apps WHERE slug=?", (slug,)).fetchone()
+        if not row:
+            raise HTTPException(404, "App not found")
+        db.execute("UPDATE apps SET is_approved=0 WHERE slug=?", (slug,))
+        db.commit()
+    return {"ok": True, "is_approved": 0}
+
+
 # Build anlegen
 @app.post("/api/dev/builds")
 async def create_build(payload: BuildCreate, user: dict = Depends(require_dev)):

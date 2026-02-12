@@ -7,7 +7,7 @@ from PySide6.QtWidgets import (
     QApplication, QMainWindow, QToolBar, QLabel, QWidget,
     QSizePolicy, QStackedWidget, QVBoxLayout, QToolButton, QWidgetAction, QHBoxLayout,
     QDialog, QFormLayout, QLineEdit, QTextEdit, QDialogButtonBox,
-    QDoubleSpinBox, QSpinBox, QListWidget, QListWidgetItem, QFileDialog
+    QDoubleSpinBox, QSpinBox, QListWidget, QListWidgetItem, QFileDialog, QStyle, QMessageBox
 )
 
 from PySide6.QtGui import QAction, QActionGroup, QIcon, QPixmap, QPainter, QPainterPath, QDesktopServices
@@ -50,35 +50,79 @@ class CartButton(QWidget):
     clicked = Signal()
     def __init__(self, parent=None, icon_path: str = "assets/cart.png"):
         super().__init__(parent)
-        lay = QHBoxLayout(self); lay.setContentsMargins(0,0,0,0); lay.setSpacing(6)
+        lay = QHBoxLayout(self); lay.setContentsMargins(0, 0, 0, 0); lay.setSpacing(0)
         abs_icon = (Path(__file__).resolve().parent / icon_path).resolve()
         self.btn = QToolButton(self)
         icon = QIcon(str(abs_icon))
-        if icon.isNull(): self.btn.setText("🛒")
-        else: self.btn.setIcon(icon)
-        self.btn.setIconSize(QSize(24, 24))
-        self.btn.setToolButtonStyle(Qt.ToolButtonIconOnly)
-        self.btn.setFixedSize(32, 32)
+        if icon.isNull():
+            fallback = self.style().standardIcon(QStyle.SP_FileDialogDetailedView)
+            if fallback.isNull():
+                self.btn.setText("Cart")
+                self.btn.setToolButtonStyle(Qt.ToolButtonTextOnly)
+            else:
+                self.btn.setIcon(fallback)
+                self.btn.setToolButtonStyle(Qt.ToolButtonIconOnly)
+        else:
+            self.btn.setIcon(icon)
+            self.btn.setToolButtonStyle(Qt.ToolButtonIconOnly)
+        self.btn.setIconSize(QSize(22, 22))
+        self.btn.setFixedSize(38, 38)
+        self.btn.setCursor(Qt.PointingHandCursor)
+        self.btn.setToolTip("Warenkorb")
         self.btn.clicked.connect(self.clicked.emit)
-        self.label = QLabel("", self); self.label.setAlignment(Qt.AlignCenter)
-        self.label.setStyleSheet("color: #e8e8e8; font-size: 12px;")
-        lay.addWidget(self.btn); lay.addWidget(self.label)
+        self.badge = QLabel("", self.btn)
+        self.badge.setAlignment(Qt.AlignCenter)
+        self.badge.setFixedHeight(18)
+        self.badge.hide()
+        lay.addWidget(self.btn)
         self.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        self.setFixedSize(40, 40)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._position_badge()
+
+    def _position_badge(self):
+        if not self.badge.text():
+            return
+        self.badge.adjustSize()
+        width = max(18, self.badge.width() + 8)
+        self.badge.setFixedSize(width, 18)
+        x = self.btn.width() - int(width * 0.55)
+        self.badge.move(x, -4)
+
     def set_count(self, n: int):
-        self.label.setText(f"({n})" if n > 0 else "")
+        count = max(0, int(n))
+        if count <= 0:
+            self.badge.hide()
+            self.badge.setText("")
+            self.btn.setToolTip("Warenkorb")
+            return
+        self.badge.setText("99+" if count > 99 else str(count))
+        self._position_badge()
+        self.badge.show()
+        self.btn.setToolTip(f"Warenkorb ({count})")
 
     def set_theme(self, theme: str):
         dark = theme == "dark"
         label_color = "#e8e8e8" if dark else "#1a1a1a"
         btn_bg = "transparent" if dark else "rgba(0,0,0,0.04)"
         btn_hover = "rgba(255,255,255,0.08)" if dark else "rgba(0,0,0,0.08)"
-        self.label.setStyleSheet(f"color: {label_color}; font-size: 12px;")
+        badge_bg = "#d04f4f" if dark else "#b93a3a"
+        badge_fg = "#ffffff"
         self.btn.setStyleSheet(
             "QToolButton{"
-            f"background:{btn_bg}; border-radius:8px; color:{label_color};"
+            f"background:{btn_bg}; border-radius:10px; color:{label_color}; font-size:11px; font-weight:700;"
             "}"
             f"QToolButton:hover{{background:{btn_hover};}}"
         )
+        self.badge.setStyleSheet(
+            "QLabel{"
+            f"background:{badge_bg}; color:{badge_fg}; border-radius:9px;"
+            "font-size:11px; font-weight:700; padding:0 4px;"
+            "}"
+        )
+        self._position_badge()
 
 
 # --------- Profil-Chip (rund maskiert) ----------
@@ -86,12 +130,15 @@ class ProfileChip(QWidget):
     clicked = Signal()
     def __init__(self):
         super().__init__()
+        self.setObjectName("profileChip")
         lay = QHBoxLayout(self); lay.setContentsMargins(6,2,6,2); lay.setSpacing(8)
         self.avatar = QLabel(); self.avatar.setFixedSize(24, 24)
-        self.name = QLabel("Profile"); self.name.setStyleSheet("color: #e8e8e8; font-size: 16px;")
+        self.avatar.setAlignment(Qt.AlignCenter)
+        self.name = QLabel("Profile")
         lay.addWidget(self.avatar); lay.addWidget(self.name)
         self.setCursor(Qt.PointingHandCursor)
         self._net_image = NetImage(self)
+        self._theme = "dark"
     def mouseReleaseEvent(self, e): self.clicked.emit()
     def _circle_pixmap(self, pm: QPixmap, size: QSize) -> QPixmap:
         s = min(size.width(), size.height())
@@ -103,34 +150,62 @@ class ProfileChip(QWidget):
         p.setClipPath(path); p.drawPixmap(0, 0, src); p.end()
         return out
     def set_user(self, username: str, avatar_path: str | None):
-        self.name.setText(username or "Profile")
+        display_name = username or "Profile"
+        self.name.setText(display_name)
         if avatar_path:
             if avatar_path.startswith("http") or avatar_path.startswith("/"):
                 url = abs_url(avatar_path)
-                def _on_ready(pm: QPixmap):
+                def _on_ready(pm: QPixmap, fallback_name=display_name):
                     circ = self._circle_pixmap(pm, self.avatar.size())
                     if not circ.isNull():
                         self.avatar.setText("")
+                        self.avatar.setStyleSheet("border:none; background:transparent;")
                         self.avatar.setPixmap(circ)
                     else:
-                        self.avatar.setPixmap(QPixmap())
-                        self.avatar.setText("👤")
+                        self._set_avatar_placeholder(fallback_name)
                 self._net_image.load(url, _on_ready, guard=self)
                 return
             if Path(avatar_path).exists():
                 pm = QPixmap(avatar_path); circ = self._circle_pixmap(pm, self.avatar.size())
-                if not circ.isNull(): self.avatar.setText(""); self.avatar.setPixmap(circ); return
-        self.avatar.setPixmap(QPixmap()); self.avatar.setText("👤")
+                if not circ.isNull():
+                    self.avatar.setText("")
+                    self.avatar.setStyleSheet("border:none; background:transparent;")
+                    self.avatar.setPixmap(circ)
+                    return
+        self._set_avatar_placeholder(display_name)
+
+    def _set_avatar_placeholder(self, name: str):
+        label = (name or "").strip()
+        initial = label[0].upper() if label else "P"
+        if not initial.isalnum():
+            initial = "P"
+        if self._theme == "dark":
+            bg = "#2f3740"
+            fg = "#f2f4f7"
+            border = "#4a5562"
+        else:
+            bg = "#d9e1ec"
+            fg = "#243142"
+            border = "#b7c3d3"
+        self.avatar.setPixmap(QPixmap())
+        self.avatar.setText(initial)
+        self.avatar.setStyleSheet(
+            f"QLabel{{background:{bg}; color:{fg}; border:1px solid {border};"
+            "border-radius:12px; font-size:12px; font-weight:700;}}"
+        )
 
     def set_theme(self, theme: str):
+        self._theme = theme
         dark = theme == "dark"
         fg = "#e8e8e8" if dark else "#1a1a1a"
         hover_bg = "rgba(255,255,255,0.07)" if dark else "rgba(0,0,0,0.06)"
         self.name.setStyleSheet(f"color: {fg}; font-size: 16px;")
         self.setStyleSheet(
-            "QWidget{border-radius:10px; padding:2px 4px;}"
-            f"QWidget:hover{{background:{hover_bg};}}"
+            "QWidget#profileChip{border-radius:10px; padding:2px 4px;}"
+            f"QWidget#profileChip:hover{{background:{hover_bg};}}"
         )
+        if self.avatar.pixmap() is None or self.avatar.pixmap().isNull():
+            self._set_avatar_placeholder(self.name.text())
 
 
 class Main(QMainWindow):
@@ -162,6 +237,7 @@ class Main(QMainWindow):
          # DevGames: Buttons verdrahten
         self.dev_games_page.edit_requested.connect(self._on_dev_edit_requested)
         self.dev_games_page.buyers_requested.connect(self._on_dev_buyers_requested)
+        self.dev_games_page.unpublish_requested.connect(self._on_dev_unpublish_requested)
 
 
         self.stack.addWidget(self.game_upload_page)
@@ -194,7 +270,7 @@ class Main(QMainWindow):
         self.pages = {
             "Shop": self.shop_page,
             "Library": self.library_page,
-            "Indie-Verse": SimplePage("🌌 Indie-Verse"),
+            "Indie-Verse": SimplePage("Indie-Verse"),
             "Profile": self.profile_page,
             "Cart": self.cart_page,
             "DevGames": self.dev_games_page,   # NEU
@@ -634,6 +710,41 @@ class Main(QMainWindow):
 
         dlg.resize(480, 320)
         dlg.exec()
+
+    def _on_dev_unpublish_requested(self, game: dict):
+        slug = str(game.get("slug") or "").strip()
+        title = str(game.get("title") or "Unbenannt")
+        if not slug:
+            self.statusBar().showMessage("Game-Slug fehlt.", 3000)
+            return
+
+        is_approved = str(game.get("is_approved")).strip().lower() in {"1", "true", "yes", "approved"}
+        if not is_approved:
+            self.statusBar().showMessage("Game ist bereits nicht im Shop.", 2500)
+            return
+
+        res = QMessageBox.question(
+            self,
+            "Aus Shop entfernen",
+            f"Soll „{title}“ aus dem Shop entfernt werden?\nDas Game bleibt in „Meine Games“ erhalten.",
+            QMessageBox.Yes | QMessageBox.Cancel,
+            QMessageBox.Cancel,
+        )
+        if res != QMessageBox.Yes:
+            return
+
+        try:
+            dev_api.unpublish_app(slug)
+        except Exception as e:
+            print("unpublish_app failed:", e)
+            self.statusBar().showMessage("Konnte Game nicht aus dem Shop entfernen.", 4000)
+            return
+
+        self.statusBar().showMessage("Game aus dem Shop entfernt.", 2500)
+        self._refresh_dev_games()
+        if hasattr(self.shop_page, "refresh"):
+            self.shop_page.refresh()
+        self._refresh_library_from_db()
 
 
     def _on_auth_changed(self):

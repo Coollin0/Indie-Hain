@@ -63,6 +63,18 @@ def update_app_meta(
     return r.json()
 
 
+def unpublish_app(slug: str) -> dict:
+    """
+    Entfernt eine eigene App aus dem Shop (setzt is_approved auf 0).
+    """
+    r = requests.post(
+        f"{API}/api/dev/apps/{slug}/unpublish",
+        headers=_headers("dev"),
+    )
+    r.raise_for_status()
+    return r.json()
+
+
 
 def report_purchase(app_id: int, price: float) -> dict:
     """

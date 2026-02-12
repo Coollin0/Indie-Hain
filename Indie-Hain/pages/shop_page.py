@@ -45,7 +45,7 @@ class ShopPage(QWidget):
         header_row = QHBoxLayout()
         header_row.setContentsMargins(0, 0, 0, 0)
 
-        header = QLabel("🛒 Indie-Hain Shop", alignment=Qt.AlignHCenter)
+        header = QLabel("Indie-Hain Shop", alignment=Qt.AlignHCenter)
         header.setStyleSheet("font-size:26px; font-weight:700; margin:8px 0 6px;")
         header_row.addStretch(1)
         header_row.addWidget(header, 0, Qt.AlignHCenter)
@@ -348,7 +348,7 @@ class ShopPage(QWidget):
                 continue
 
             if gid in self._owned_ids:
-                badge.setText("✔︎ Gekauft")
+                badge.setText("Gekauft")
                 badge.show()
             elif gid in self._cart_ids:
                 badge.setText("Im Warenkorb")

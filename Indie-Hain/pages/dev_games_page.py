@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (
 class DevGamesPage(QWidget):
     edit_requested = Signal(dict)       # später für Edit-Dialog
     buyers_requested = Signal(dict)     # später für Käuferliste
+    unpublish_requested = Signal(dict)  # entfernt App aus dem Shop
     upload_requested = Signal()
 
     CARD_W = 230
@@ -82,6 +83,8 @@ class DevGamesPage(QWidget):
         price = float(game.get("price") or 0.0)
         sale = float(game.get("sale_percent") or 0.0)
         purchase_count = int(game.get("purchase_count") or 0)
+        approved_raw = game.get("is_approved")
+        is_approved = str(approved_raw).strip().lower() in {"1", "true", "yes", "approved"}
 
         card = QFrame()
         card.setObjectName("devcard")
@@ -103,7 +106,21 @@ class DevGamesPage(QWidget):
         lbl_title = QLabel(title)
         lbl_title.setWordWrap(True)
         lbl_title.setStyleSheet("font-size: 14px; font-weight: 600; color: #f5f5f5;")
-        lay.addWidget(lbl_title)
+        title_row = QHBoxLayout()
+        title_row.setContentsMargins(0, 0, 0, 0)
+        title_row.setSpacing(8)
+        title_row.addWidget(lbl_title, 1)
+
+        status_dot = QFrame()
+        status_dot.setFixedSize(10, 10)
+        if is_approved:
+            status_dot.setStyleSheet("background:#35c759; border-radius:5px;")
+            status_dot.setToolTip("Approved")
+        else:
+            status_dot.setStyleSheet("background:#ff4d4f; border-radius:5px;")
+            status_dot.setToolTip("Noch nicht approved")
+        title_row.addWidget(status_dot, 0, Qt.AlignTop | Qt.AlignRight)
+        lay.addLayout(title_row)
 
         # Preis + Rabatt
         if sale > 0:
@@ -140,8 +157,23 @@ class DevGamesPage(QWidget):
         btn_buyers.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         btn_buyers.clicked.connect(lambda _, g=game: self.buyers_requested.emit(g))
 
+        btn_unpublish = QPushButton("Aus Shop entfernen")
+        btn_unpublish.setCursor(Qt.PointingHandCursor)
+        btn_unpublish.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        btn_unpublish.setEnabled(is_approved)
+        btn_unpublish.clicked.connect(lambda _, g=game: self.unpublish_requested.emit(g))
+        btn_unpublish.setStyleSheet(
+            "QPushButton{background:#5a2a2a;color:#ffecec;border:1px solid #7a3a3a;border-radius:8px;padding:6px 8px;}"
+            "QPushButton:hover{background:#6c3333;border-color:#934646;}"
+            "QPushButton:pressed{background:#4a2323;}"
+            "QPushButton:disabled{background:#303030;color:#8f8f8f;border-color:#3f3f3f;}"
+        )
+        if not is_approved:
+            btn_unpublish.setToolTip("Bereits nicht im Shop")
+
         row.addWidget(btn_edit)
         row.addWidget(btn_buyers)
+        row.addWidget(btn_unpublish)
         lay.addLayout(row)
 
         return card

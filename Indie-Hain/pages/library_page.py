@@ -264,32 +264,64 @@ class LibraryPage(QWidget):
         installed = bool(game.get("installed"))
         btn_install = QPushButton("Starten" if installed else "Installieren")
         btn_install.setCursor(Qt.PointingHandCursor)
+        btn_install.setMinimumHeight(32)
+        btn_install.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         if installed:
             btn_install.clicked.connect(lambda _=None, g=game: self.start_requested.emit(g))
+            btn_install.setStyleSheet(
+                "QPushButton{"
+                "background:#2f7d4e;color:#f4fff8;border:1px solid #4ea66f;"
+                "border-radius:8px;padding:0 12px;font-size:12px;font-weight:700;}"
+                "QPushButton:hover{background:#3b9460;border-color:#68bf87;}"
+                "QPushButton:pressed{background:#296944;}"
+            )
         else:
             btn_install.clicked.connect(lambda _=None, g=game: self.install_requested.emit(g))
+            btn_install.setStyleSheet(
+                "QPushButton{"
+                "background:#1f6ad6;color:#f4f9ff;border:1px solid #3a86f4;"
+                "border-radius:8px;padding:0 12px;font-size:12px;font-weight:700;}"
+                "QPushButton:hover{background:#2a78ea;border-color:#56a0ff;}"
+                "QPushButton:pressed{background:#1a5bbb;}"
+            )
 
         btn_uninstall = QPushButton("Deinstallieren")
         btn_uninstall.setCursor(Qt.PointingHandCursor)
+        btn_uninstall.setMinimumHeight(32)
+        btn_uninstall.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         btn_uninstall.setEnabled(installed)
         btn_uninstall.clicked.connect(lambda _=None, g=game: self.uninstall_requested.emit(g))
+        btn_uninstall.setStyleSheet(
+            "QPushButton{"
+            "background:#7b2f2f;color:#fff5f5;border:1px solid #a24a4a;"
+            "border-radius:8px;padding:0 12px;font-size:12px;font-weight:700;}"
+            "QPushButton:hover{background:#944040;border-color:#bf5b5b;}"
+            "QPushButton:pressed{background:#682727;}"
+            "QPushButton:disabled{background:#2b2b2b;color:#7f7f7f;border-color:#3a3a3a;}"
+        )
 
         btn_open = QPushButton("Ordner")
         btn_open.setCursor(Qt.PointingHandCursor)
+        btn_open.setMinimumHeight(32)
+        btn_open.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         btn_open.setEnabled(installed)
         btn_open.clicked.connect(lambda _=None, g=game: self.open_requested.emit(g))
+        btn_open.setStyleSheet(
+            "QPushButton{"
+            "background:#2f3642;color:#eef2f8;border:1px solid #4a5568;"
+            "border-radius:8px;padding:0 12px;font-size:12px;font-weight:700;}"
+            "QPushButton:hover{background:#3c4554;border-color:#606f87;}"
+            "QPushButton:pressed{background:#272e38;}"
+            "QPushButton:disabled{background:#2b2b2b;color:#7f7f7f;border-color:#3a3a3a;}"
+        )
 
-        install_row = QHBoxLayout()
-        install_row.setContentsMargins(0, 0, 0, 0)
-        install_row.setSpacing(0)
-        install_row.addStretch()
-        install_row.addWidget(btn_install)
-        install_row.addSpacing(8)
-        install_row.addWidget(btn_open)
-        install_row.addSpacing(8)
-        install_row.addWidget(btn_uninstall)
-        install_row.addStretch()
-        lay.addLayout(install_row)
+        actions_col = QVBoxLayout()
+        actions_col.setContentsMargins(0, 2, 0, 0)
+        actions_col.setSpacing(6)
+        actions_col.addWidget(btn_install)
+        actions_col.addWidget(btn_open)
+        actions_col.addWidget(btn_uninstall)
+        lay.addLayout(actions_col)
 
         # --- KEINE DESCRIPTION MEHR IN LIBRARY! ---
         # (absichtlich entfernt)
