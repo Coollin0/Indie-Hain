@@ -1,5 +1,6 @@
 # backend/main.py
 from fastapi import FastAPI, HTTPException, Body, Depends, APIRouter, UploadFile, File, Header
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from typing import Iterator, Optional
@@ -45,6 +46,15 @@ from pathlib import Path as _Path
 ensure_schema()
 
 app = FastAPI(title="Indie-Hain Distribution API")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "https://dashboard.indie-hain.corneliusgames.com",
+        "https://indie-hain.corneliusgames.com",
+    ],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 _static = _Path(__file__).resolve().parent / "static"
 (_static / "covers").mkdir(parents=True, exist_ok=True)
