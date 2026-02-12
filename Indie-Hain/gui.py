@@ -25,7 +25,14 @@ from services.install_worker import start_install_thread
 from services import shop_api
 from services import dev_api   # NEU
 from services.net_image import NetImage
-from services.env import abs_url, install_root, legacy_install_roots, add_legacy_install_dir
+from services.env import (
+    abs_url,
+    install_root,
+    legacy_install_roots,
+    add_legacy_install_dir,
+    launcher_theme,
+    set_launcher_theme,
+)
 from data import store
 
 
@@ -59,6 +66,19 @@ class CartButton(QWidget):
         self.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
     def set_count(self, n: int):
         self.label.setText(f"({n})" if n > 0 else "")
+
+    def set_theme(self, theme: str):
+        dark = theme == "dark"
+        label_color = "#e8e8e8" if dark else "#1a1a1a"
+        btn_bg = "transparent" if dark else "rgba(0,0,0,0.04)"
+        btn_hover = "rgba(255,255,255,0.08)" if dark else "rgba(0,0,0,0.08)"
+        self.label.setStyleSheet(f"color: {label_color}; font-size: 12px;")
+        self.btn.setStyleSheet(
+            "QToolButton{"
+            f"background:{btn_bg}; border-radius:8px; color:{label_color};"
+            "}"
+            f"QToolButton:hover{{background:{btn_hover};}}"
+        )
 
 
 # --------- Profil-Chip (rund maskiert) ----------
@@ -102,6 +122,16 @@ class ProfileChip(QWidget):
                 if not circ.isNull(): self.avatar.setText(""); self.avatar.setPixmap(circ); return
         self.avatar.setPixmap(QPixmap()); self.avatar.setText("👤")
 
+    def set_theme(self, theme: str):
+        dark = theme == "dark"
+        fg = "#e8e8e8" if dark else "#1a1a1a"
+        hover_bg = "rgba(255,255,255,0.07)" if dark else "rgba(0,0,0,0.06)"
+        self.name.setStyleSheet(f"color: {fg}; font-size: 16px;")
+        self.setStyleSheet(
+            "QWidget{border-radius:10px; padding:2px 4px;}"
+            f"QWidget:hover{{background:{hover_bg};}}"
+        )
+
 
 class Main(QMainWindow):
     def __init__(self):
@@ -110,6 +140,8 @@ class Main(QMainWindow):
         self.resize(1000, 650)
 
         store.init_db()
+        self._theme = launcher_theme()
+        self._theme_syncing = False
 
         # Warenkorb-/State-Daten
         self.cart: list[dict] = []
@@ -238,6 +270,15 @@ class Main(QMainWindow):
         right_spacer = QWidget(); right_spacer.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         tb.addWidget(right_spacer)
 
+        self.theme_btn = QToolButton(self)
+        self.theme_btn.setObjectName("themeToggle")
+        self.theme_btn.setCheckable(True)
+        self.theme_btn.setCursor(Qt.PointingHandCursor)
+        self.theme_btn.toggled.connect(self._on_theme_toggled)
+        theme_action = QWidgetAction(self)
+        theme_action.setDefaultWidget(self.theme_btn)
+        tb.addAction(theme_action)
+
         # Warenkorb rechts
         self.cart_btn = CartButton(icon_path="assets/cart.png")
         cart_widget_action = QWidgetAction(self); cart_widget_action.setDefaultWidget(self.cart_btn)
@@ -246,6 +287,7 @@ class Main(QMainWindow):
         self.cart_btn.clicked.connect(lambda: (self.uncheck_nav(), self.show_page("Cart")))
         self.cart_btn.set_count(0)
 
+        self._apply_theme()
         self._sync_dev_tab_visibility()
 
 
@@ -271,6 +313,92 @@ class Main(QMainWindow):
         self.group.setExclusive(False)
         for act in self.actions.values(): act.setChecked(False)
         self.group.setExclusive(True)
+
+    def _on_theme_toggled(self, checked: bool):
+        if self._theme_syncing:
+            return
+        self._theme = "dark" if checked else "light"
+        set_launcher_theme(self._theme)
+        self._apply_theme()
+        self.statusBar().showMessage(
+            f"Theme: {'Dark' if self._theme == 'dark' else 'Light'}",
+            1600,
+        )
+
+    def _apply_theme(self):
+        dark = self._theme == "dark"
+
+        if dark:
+            base_qss = """
+                QMainWindow { background: #131416; color: #e8e8e8; }
+                QWidget { color: #e8e8e8; }
+                QStatusBar { background: #111315; color: #d8d8d8; border-top: 1px solid #2b2f34; }
+                QLineEdit, QTextEdit, QPlainTextEdit, QListWidget, QComboBox, QSpinBox, QDoubleSpinBox {
+                    background: #1f2226; color: #f2f2f2; border: 1px solid #383d44; border-radius: 8px;
+                }
+                QPushButton {
+                    background: #2b2f34; color: #f3f3f3; border: 1px solid #3d434b; border-radius: 10px; padding: 6px 12px;
+                }
+                QPushButton:hover { background: #343a43; }
+                QPushButton:pressed { background: #262b33; }
+            """
+            toolbar_qss = """
+                QToolBar { spacing: 14px; background: #111315; border: none; }
+                QToolButton { font-size: 16px; padding: 8px 16px; color: #e8e8e8; border: 1px solid transparent; border-radius: 8px; }
+                QToolButton:hover { background: rgba(255,255,255,0.07); }
+                QToolButton:checked { background: #dcdcdc; color: #111; border-radius: 8px; }
+            """
+            theme_btn_qss = """
+                QToolButton#themeToggle {
+                    font-size: 13px; font-weight: 700;
+                    color: #e8e8e8; background: rgba(255,255,255,0.08);
+                    border: 1px solid #3a4048; border-radius: 10px; padding: 6px 12px;
+                }
+                QToolButton#themeToggle:hover { background: rgba(255,255,255,0.14); }
+                QToolButton#themeToggle:pressed { background: rgba(255,255,255,0.2); }
+            """
+        else:
+            base_qss = """
+                QMainWindow { background: #f4f6f9; color: #171717; }
+                QWidget { color: #171717; }
+                QStatusBar { background: #e6eaf0; color: #1d1d1d; border-top: 1px solid #c9d1dc; }
+                QLineEdit, QTextEdit, QPlainTextEdit, QListWidget, QComboBox, QSpinBox, QDoubleSpinBox {
+                    background: #ffffff; color: #171717; border: 1px solid #c4ccd8; border-radius: 8px;
+                }
+                QPushButton {
+                    background: #ffffff; color: #1a1a1a; border: 1px solid #bcc6d4; border-radius: 10px; padding: 6px 12px;
+                }
+                QPushButton:hover { background: #f2f5fa; }
+                QPushButton:pressed { background: #e8edf5; }
+            """
+            toolbar_qss = """
+                QToolBar { spacing: 14px; background: #e9edf3; border: none; }
+                QToolButton { font-size: 16px; padding: 8px 16px; color: #171717; border: 1px solid transparent; border-radius: 8px; }
+                QToolButton:hover { background: rgba(0,0,0,0.08); }
+                QToolButton:checked { background: #1f2937; color: #f3f4f6; border-radius: 8px; }
+            """
+            theme_btn_qss = """
+                QToolButton#themeToggle {
+                    font-size: 13px; font-weight: 700;
+                    color: #171717; background: rgba(0,0,0,0.05);
+                    border: 1px solid #bcc6d4; border-radius: 10px; padding: 6px 12px;
+                }
+                QToolButton#themeToggle:hover { background: rgba(0,0,0,0.1); }
+                QToolButton#themeToggle:pressed { background: rgba(0,0,0,0.14); }
+            """
+
+        self.setStyleSheet(base_qss)
+        self.tb.setStyleSheet(toolbar_qss)
+        self.theme_btn.setStyleSheet(theme_btn_qss)
+
+        self._theme_syncing = True
+        self.theme_btn.setChecked(dark)
+        self.theme_btn.setText("Dark" if dark else "Light")
+        self.theme_btn.setToolTip("Theme wechseln (launcher-intern)")
+        self._theme_syncing = False
+
+        self.cart_btn.set_theme(self._theme)
+        self.profile_chip.set_theme(self._theme)
 
     def _refresh_library_from_db(self):
         # 1) Library-Items aus lokaler DB

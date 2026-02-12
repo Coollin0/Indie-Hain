@@ -287,3 +287,18 @@ def clear_legacy_install_dirs() -> None:
 def abs_url(u: str) -> str:
     if not u: return ""
     return u if u.startswith("http") else f"{api_base()}{u}"
+
+
+def launcher_theme() -> str:
+    raw = _settings_value(("LAUNCHER_THEME", "launcher_theme"))
+    theme = (raw or "").strip().lower()
+    if theme in {"light", "dark"}:
+        return theme
+    return "dark"
+
+
+def set_launcher_theme(theme: str) -> None:
+    normalized = str(theme or "").strip().lower()
+    if normalized not in {"light", "dark"}:
+        normalized = "dark"
+    update_settings({"launcher_theme": normalized})

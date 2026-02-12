@@ -3,8 +3,8 @@ from __future__ import annotations
 from typing import Dict, List, Set
 
 from PySide6.QtCore import (
-    Qt, QSize, Signal, QObject, QEvent, QTimer,
-    QPropertyAnimation, QEasingCurve, QRect
+    Qt, QSize, Signal, QEvent, QTimer,
+    QPropertyAnimation, QEasingCurve
 )
 from PySide6.QtGui import QIcon, QPixmap
 from PySide6.QtWidgets import (
@@ -113,12 +113,6 @@ class ShopPage(QWidget):
         """
         return list(self._games)
 
-    # ---------- Events ----------
-    def eventFilter(self, obj: QObject, ev) -> bool:
-        if obj is self.scroll.viewport() and ev.type() == QEvent.Resize:
-            self._relayout()
-        return super().eventFilter(obj, ev)
-
     def showEvent(self, event):
         super().showEvent(event)
         self.refresh()
@@ -187,7 +181,7 @@ class ShopPage(QWidget):
         lay.setContentsMargins(10, 10, 10, 10)
         lay.setSpacing(8)
 
-        # --- Cover mit Hover-Zoom ---
+        # --- Cover mit Hover-Overlay ---
         cover_btn = QToolButton()
         cover_btn.setToolButtonStyle(Qt.ToolButtonIconOnly)
         cover_btn.setIconSize(QSize(self.CARD_W - 20, self.COVER_H))
@@ -199,10 +193,7 @@ class ShopPage(QWidget):
         lay.addWidget(cover_btn)
         cover_btn.clicked.connect(lambda _, g=game: self.game_clicked.emit(g))
 
-        # Hover-Animation Setup
-        cover_btn._hover_anim = QPropertyAnimation(cover_btn, b"geometry", cover_btn)
-        cover_btn._hover_anim.setDuration(130)
-        cover_btn._hover_anim.setEasingCurve(QEasingCurve.OutQuad)
+        # Hover-Setup
         cover_btn.installEventFilter(self)
 
         # Badge
@@ -256,21 +247,23 @@ class ShopPage(QWidget):
             QFrame#overlay QLabel { color: #f2f2f2; background: transparent; }
         """)
         overlay.setGeometry(0, 0, cover_btn.width(), cover_btn.height())
+        overlay.setAttribute(Qt.WA_TransparentForMouseEvents, True)
         overlay.hide()
         ov_lay = QVBoxLayout(overlay)
         ov_lay.setContentsMargins(10, 10, 10, 10)
         ov_lay.setSpacing(6)
         t_lbl = QLabel(title)
+        t_lbl.setAttribute(Qt.WA_TransparentForMouseEvents, True)
         t_lbl.setWordWrap(True)
         t_lbl.setStyleSheet("font-size:14px; font-weight:700; background: transparent;")
         ov_lay.addWidget(t_lbl)
         if desc:
             d_lbl = QLabel(desc)
+            d_lbl.setAttribute(Qt.WA_TransparentForMouseEvents, True)
             d_lbl.setWordWrap(True)
             d_lbl.setStyleSheet("font-size:12px; color:#d8d8d8; background: transparent;")
             d_lbl.setFixedHeight(min(120, 300))  # begrenzt die Höhe ein wenig
             d_lbl.setAlignment(Qt.AlignTop)
-            d_lbl.setTextInteractionFlags(Qt.TextSelectableByMouse)
             ov_lay.addWidget(d_lbl)
         ov_lay.addStretch(1)
         cover_btn._hover_overlay = overlay
@@ -280,15 +273,15 @@ class ShopPage(QWidget):
 
     # ========== Effekte ==========
     def eventFilter(self, obj, ev):
-        # Hover Zoom-Effekt
+        if obj is self.scroll.viewport() and ev.type() == QEvent.Resize:
+            self._relayout()
+
         if isinstance(obj, QToolButton):
             if ev.type() == QEvent.Enter:
-                self._animate_hover(obj, zoom_in=True)
                 ov = getattr(obj, "_hover_overlay", None)
                 if ov:
                     ov.show()
             elif ev.type() == QEvent.Leave:
-                self._animate_hover(obj, zoom_in=False)
                 ov = getattr(obj, "_hover_overlay", None)
                 if ov:
                     ov.hide()
@@ -301,27 +294,6 @@ class ShopPage(QWidget):
                 if pl:
                     pl.move(obj.width() - pl.width() - 10, obj.height() - pl.height() - 10)
         return super().eventFilter(obj, ev)
-
-    def _animate_hover(self, btn: QToolButton, zoom_in: bool):
-        """Kleine Scale-Animation beim Hovern."""
-        anim: QPropertyAnimation = getattr(btn, "_hover_anim", None)
-        if not anim:
-            return
-        rect = btn.geometry()
-        if zoom_in:
-            new_rect = QRect(
-                rect.x() - 3, rect.y() - 3,
-                rect.width() + 6, rect.height() + 6
-            )
-        else:
-            new_rect = QRect(
-                rect.x() + 3, rect.y() + 3,
-                rect.width() - 6, rect.height() - 6
-            )
-        anim.stop()
-        anim.setStartValue(rect)
-        anim.setEndValue(new_rect)
-        anim.start()
 
     # ===== Helpers =====
     def _clamp_two_lines(self, text: str, avail_px: int) -> str:
