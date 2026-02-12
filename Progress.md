@@ -112,3 +112,57 @@ Last updated: 2026-01-29
 - Umgesetztes Feature: Admin Dashboard mit Auswahl-Checkboxen und Bulk-Approve/Reject für Submissions.
 - Geänderte Dateien: `indie-hain-dashboard/src/app/page.tsx`
 - Technische Begründung: Moderation mehrerer Uploads in einem Schritt reduziert Klicks und beschleunigt Ops-Workflows.
+
+### 2026-02-11
+- Datum: 2026-02-11
+- Umgesetztes Feature: Library-Filter (Suche + "Nur installiert" + Trefferanzeige) sowie Admin-Dashboard Auto-Refresh, Trefferkarten, Copy-Buttons und Bulk-Aktionen mit Status-Skip.
+- Geänderte Dateien: `pages/library_page.py`, `indie-hain-dashboard/src/app/page.tsx`
+- Technische Begründung: Schnellere Navigation in der Library und effizientere Admin-Workflows mit weniger Fehlaktionen und manuellen Refreshes.
+
+### 2026-02-11
+- Datum: 2026-02-11
+- Umgesetztes Feature: Admin-Overview-Endpoint (KPIs zu Usern, Submissions, Apps, Käufen) sowie Dashboard-Snapshot inkl. Umsatz/Käufe und ZIP-Download für Submission-Builds.
+- Geänderte Dateien: `Indie-Hain-Distribution/backend/main.py`, `indie-hain-dashboard/src/app/page.tsx`
+- Technische Begründung: Admins bekommen konsolidierte Live-Kennzahlen und können Builds schneller prüfen, ohne separate Backend-Abfragen.
+
+### 2026-02-11
+- Datum: 2026-02-11
+- Umgesetztes Feature: Admin Dashboard erweitert um Submission-Dateiliste mit Suche, per-file Verify/Download/Copy und Live-Status.
+- Geänderte Dateien: `indie-hain-dashboard/src/app/page.tsx`
+- Technische Begründung: Admins koennen Builds granular pruefen und Dateien gezielt herunterladen/validieren, ohne ZIPs oder externe Tools.
+
+### 2026-02-11
+- Datum: 2026-02-11
+- Umgesetztes Feature: Submission-File-Endpunkte nutzen nun sicheren Manifest-Resolve gegen Path-Traversal.
+- Geänderte Dateien: `Indie-Hain-Distribution/backend/main.py`
+- Technische Begründung: Schuetzt Admin-Downloads/Verifikation vor unsicheren Manifest-Pfaden.
+
+### 2026-02-11
+- Datum: 2026-02-11
+- Umgesetztes Feature: Library zeigt Installiert-Zaehler neben Trefferanzeige.
+- Geänderte Dateien: `pages/library_page.py`
+- Technische Begründung: Schneller Ueberblick ueber installierte Titel ohne weitere Navigation.
+
+### 2026-02-11
+- Datum: 2026-02-11
+- Umgesetztes Feature: Admin Dashboard mit Quick-Status-Chips und Submission-Dateiliste inkl. Hash/Chunk-Details + Copy-Buttons; Backend liefert normalisierte Chunk-Metadaten.
+- Geänderte Dateien: `indie-hain-dashboard/src/app/page.tsx`, `Indie-Hain-Distribution/backend/main.py`
+- Technische Begründung: Schnellere Moderation durch Status-Switches und bessere Build-Checks ohne externe Tools; Backend antwortet konsistenter auf File-Inspection.
+
+### 2026-02-11
+- Datum: 2026-02-11
+- Umgesetztes Feature: Library-Header mit "Pfad hinzufügen" (Legacy-Installationsordner) plus Anzeige fehlender Installationen; Admin-Dashboard zeigt Submission-Alter, Copy-Summary und "Verify gefilterte"; Backend liefert Submissions absteigend nach created_at.
+- Geänderte Dateien: `pages/library_page.py`, `gui.py`, `Indie-Hain-Distribution/backend/main.py`, `indie-hain-dashboard/src/app/page.tsx`
+- Technische Begründung: Erleichtert Reparatur verschobener Installationen, priorisiert aktuelle Submissions im Admin-Workflow und beschleunigt Datei-Checks über Massen-Verify.
+
+### 2026-02-11
+- Datum: 2026-02-11
+- Umgesetztes Feature: Admin-Dashboard zeigt SLA-Alter für pending Submissions und Batch-Verify mit Fortschritt; Backend bietet neuen Batch-Verify-Endpunkt für Submission-Dateien.
+- Geänderte Dateien: `Indie-Hain-Distribution/backend/main.py`, `indie-hain-dashboard/src/app/page.tsx`
+- Technische Begründung: Ops erkennt überfällige Submissions schneller und prüft viele Dateien in einem Call, was UI-Latenz und manuelle Schritte reduziert.
+
+### 2026-02-11
+- Datum: 2026-02-11
+- Umgesetztes Feature: SLA-Filterchips im Admin-Dashboard sowie detaillierte Verify-Fehlerauswertung mit Status-Summary; Batch-Verify liefert pro Datei Fehler statt Gesamt-Abbruch.
+- Geänderte Dateien: `Indie-Hain-Distribution/backend/main.py`, `indie-hain-dashboard/src/app/page.tsx`
+- Technische Begründung: Ops kann überfällige Submissions fokussiert priorisieren und Verifikationsprobleme schneller eingrenzen, ohne dass ein einzelner Defekt den Batch stoppt.

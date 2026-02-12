@@ -7,7 +7,7 @@ from PySide6.QtWidgets import (
     QApplication, QMainWindow, QToolBar, QLabel, QWidget,
     QSizePolicy, QStackedWidget, QVBoxLayout, QToolButton, QWidgetAction, QHBoxLayout,
     QDialog, QFormLayout, QLineEdit, QTextEdit, QDialogButtonBox,
-    QDoubleSpinBox, QSpinBox, QListWidget, QListWidgetItem
+    QDoubleSpinBox, QSpinBox, QListWidget, QListWidgetItem, QFileDialog
 )
 
 from PySide6.QtGui import QAction, QActionGroup, QIcon, QPixmap, QPainter, QPainterPath, QDesktopServices
@@ -25,7 +25,7 @@ from services.install_worker import start_install_thread
 from services import shop_api
 from services import dev_api   # NEU
 from services.net_image import NetImage
-from services.env import abs_url, install_root, legacy_install_roots
+from services.env import abs_url, install_root, legacy_install_roots, add_legacy_install_dir
 from data import store
 
 
@@ -180,6 +180,8 @@ class Main(QMainWindow):
             self.library_page.open_requested.connect(self._on_library_open_requested)
         if hasattr(self.library_page, "rescan_requested"):
             self.library_page.rescan_requested.connect(self._on_library_rescan)
+        if hasattr(self.library_page, "legacy_path_requested"):
+            self.library_page.legacy_path_requested.connect(self._on_library_add_path)
         self._install_thread = None
         self._install_worker = None
         self._install_focus_refresh()
@@ -275,6 +277,7 @@ class Main(QMainWindow):
         items = store.get_library_items()
 
         merged = []
+        missing_count = 0
         for lib_item in items:
             gid = int(lib_item["id"])
 
@@ -315,12 +318,17 @@ class Main(QMainWindow):
             # Install-Status
             install_dir = self._resolve_install_dir(slug)
             g["install_dir"] = str(install_dir)
-            g["installed"] = install_dir.exists()
+            installed = install_dir.exists()
+            g["installed"] = installed
+            if not installed:
+                missing_count += 1
 
             merged.append(g)
 
         # 4) Library updaten
         self.library_page.set_items(merged)
+        if hasattr(self.library_page, "set_missing_count"):
+            self.library_page.set_missing_count(missing_count)
 
         # 5) owned_ids setzen
         self.owned_ids = {int(x["id"]) for x in merged}
@@ -345,6 +353,19 @@ class Main(QMainWindow):
             QDesktopServices.openUrl(QUrl.fromLocalFile(install_dir))
         else:
             self.statusBar().showMessage("Installationsordner nicht gefunden.", 4000)
+
+    def _on_library_add_path(self):
+        start_dir = str(install_root())
+        path = QFileDialog.getExistingDirectory(
+            self,
+            "Legacy-Installationsordner auswählen",
+            start_dir,
+        )
+        if not path:
+            return
+        add_legacy_install_dir(Path(path))
+        self.statusBar().showMessage("Legacy-Installationspfad hinzugefügt.", 4000)
+        self._refresh_library_from_db()
 
     def _resolve_install_dir(self, slug: str) -> Path:
         primary = install_root() / slug

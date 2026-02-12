@@ -1,12 +1,11 @@
 # backend/main.py
 from fastapi import FastAPI, HTTPException, Body, Depends, APIRouter, UploadFile, File, Header
-from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from typing import Iterator, Optional
 from pathlib import Path
-from datetime import datetime
-import hashlib, json, io, zipfile, tempfile, os, secrets, re
+from datetime import datetime, timedelta
+import hashlib, json, io, zipfile, tempfile, os, re
 
 from .auth import (
     require_dev,
@@ -21,14 +20,9 @@ from .auth import (
     set_role_by_email,
     set_role_by_id,
     update_avatar_url,
-    set_user_password,
-    set_temp_password,
-    clear_temp_password,
-    verify_temp_password,
     revoke_session_by_id,
     revoke_session_by_refresh,
     session_id_from_access_token,
-    revoke_sessions_for_user,
 )
 from .db import get_db, STORAGE_CHUNKS, STORAGE_APPS, ensure_schema
 from .models import (
@@ -44,25 +38,13 @@ from .models import (
     AuthBootstrap,
     AuthRefresh,
     AuthLogout,
-    AuthResetPassword,
     AdminRoleUpdate,
-    AdminPasswordReset,
 )
 from pathlib import Path as _Path
 
 ensure_schema()
 
 app = FastAPI(title="Indie-Hain Distribution API")
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=[
-        "https://dashboard.indie-hain.corneliusgames.com",
-    ],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
 
 _static = _Path(__file__).resolve().parent / "static"
 (_static / "covers").mkdir(parents=True, exist_ok=True)
@@ -76,25 +58,6 @@ app.mount(
 # Router für Admin & Public APIs
 admin = APIRouter(prefix="/api/admin", tags=["admin"])
 public = APIRouter(prefix="/api/public", tags=["public"])
-
-
-def _user_for_reset(identity: str, by_username: bool) -> dict | None:
-    if not identity:
-        return None
-    with get_db() as db:
-        if by_username:
-            row = db.execute(
-                "SELECT id FROM users WHERE lower(username) = lower(?)",
-                (identity.strip(),),
-            ).fetchone()
-        else:
-            row = db.execute(
-                "SELECT id FROM users WHERE email = ?",
-                (identity.strip().lower(),),
-            ).fetchone()
-    if not row:
-        return None
-    return {"id": int(row["id"])}
 
 
 # ===============================
@@ -116,8 +79,6 @@ def auth_login(payload: AuthLogin):
         user = authenticate_username(payload.username, payload.password)
     if not user:
         raise HTTPException(401, "Invalid credentials")
-    if user.get("must_reset_password"):
-        raise HTTPException(403, "PASSWORD_RESET_REQUIRED")
     return issue_tokens(user, payload.device_id)
 
 
@@ -171,22 +132,6 @@ def auth_logout(payload: AuthLogout, authorization: str | None = Header(default=
     raise HTTPException(400, "Missing session")
 
 
-@app.post("/api/auth/reset-password")
-def auth_reset_password(payload: AuthResetPassword):
-    if payload.email:
-        u = _user_for_reset(payload.email, by_username=False)
-    else:
-        u = _user_for_reset(payload.username or "", by_username=True)
-    if not u:
-        raise HTTPException(401, "Invalid credentials")
-    if not verify_temp_password(u["id"], payload.temp_password):
-        raise HTTPException(401, "Invalid credentials")
-    set_user_password(u["id"], payload.new_password)
-    clear_temp_password(u["id"])
-    revoke_sessions_for_user(u["id"])
-    return {"ok": True}
-
-
 @app.post("/api/auth/avatar")
 async def auth_avatar(
     file: UploadFile = File(...),
@@ -223,12 +168,7 @@ def health():
 def admin_list_users(user=Depends(require_admin)):
     with get_db() as db:
         rows = db.execute(
-            """
-            SELECT id, email, role, username, avatar_url, created_at,
-                   force_password_reset
-            FROM users
-            ORDER BY created_at DESC
-            """
+            "SELECT id, email, role, username, avatar_url, created_at FROM users ORDER BY created_at DESC"
         ).fetchall()
     items = []
     for r in rows:
@@ -239,7 +179,6 @@ def admin_list_users(user=Depends(require_admin)):
             "username": r["username"] or "",
             "avatar_url": r["avatar_url"] or "",
             "created_at": r["created_at"],
-            "force_password_reset": int(r["force_password_reset"] or 0),
         })
     return {"items": items}
 
@@ -253,43 +192,70 @@ def admin_set_role(user_id: int, payload: AdminRoleUpdate, user=Depends(require_
     return {"user": updated}
 
 
-@admin.delete("/users/{user_id}")
-def admin_delete_user(user_id: int, user=Depends(require_admin)):
-    uid = int(user_id)
-    if uid == int(user["user_id"]):
-        raise HTTPException(400, "cannot delete self")
+@admin.get("/overview")
+def admin_overview(user=Depends(require_admin)):
+    since_30d = (datetime.utcnow() - timedelta(days=30)).isoformat()
     with get_db() as db:
-        target = db.execute(
-            "SELECT id, role FROM users WHERE id=?",
-            (uid,),
-        ).fetchone()
-        if not target:
-            raise HTTPException(404, "user not found")
-        if (target["role"] or "user").lower() == "admin":
-            raise HTTPException(403, "cannot delete admin user")
-        owns = db.execute(
-            "SELECT COUNT(*) AS c FROM apps WHERE owner_user_id=?",
-            (uid,),
-        ).fetchone()
-        if owns and int(owns["c"]) > 0:
-            raise HTTPException(400, "user owns apps")
-        db.execute("DELETE FROM sessions WHERE user_id=?", (uid,))
-        db.execute("DELETE FROM purchases WHERE user_id=?", (uid,))
-        db.execute("DELETE FROM submissions WHERE user_id=?", (uid,))
-        db.execute("DELETE FROM users WHERE id=?", (uid,))
-        db.commit()
-    return {"ok": True}
+        user_total = db.execute("SELECT COUNT(*) AS c FROM users").fetchone()["c"]
+        role_rows = db.execute(
+            "SELECT role, COUNT(*) AS c FROM users GROUP BY role"
+        ).fetchall()
+        role_counts = {(r["role"] or "user").lower(): r["c"] for r in role_rows}
 
+        submission_rows = db.execute(
+            "SELECT status, COUNT(*) AS c FROM submissions GROUP BY status"
+        ).fetchall()
+        submission_counts = {(r["status"] or "pending").lower(): r["c"] for r in submission_rows}
+        submissions_total = sum(submission_counts.values())
 
-@admin.post("/users/{user_id}/reset-password")
-def admin_reset_password(user_id: int, payload: AdminPasswordReset, user=Depends(require_admin)):
-    if payload.password:
-        new_password = payload.password
-    else:
-        new_password = secrets.token_urlsafe(10)
-    updated = set_temp_password(user_id, new_password)
-    revoke_sessions_for_user(user_id)
-    return {"user": updated, "password": new_password}
+        apps_total = db.execute("SELECT COUNT(*) AS c FROM apps").fetchone()["c"]
+        apps_approved = db.execute(
+            "SELECT COUNT(*) AS c FROM apps WHERE is_approved=1"
+        ).fetchone()["c"]
+
+        purchases_total = db.execute(
+            "SELECT COUNT(*) AS c, COALESCE(SUM(price), 0) AS total FROM purchases"
+        ).fetchone()
+        purchases_30d = db.execute(
+            "SELECT COUNT(*) AS c, COALESCE(SUM(price), 0) AS total FROM purchases WHERE purchased_at >= ?",
+            (since_30d,),
+        ).fetchone()
+
+        last_user = db.execute("SELECT MAX(created_at) AS ts FROM users").fetchone()["ts"]
+        last_submission = db.execute("SELECT MAX(created_at) AS ts FROM submissions").fetchone()["ts"]
+        last_purchase = db.execute("SELECT MAX(purchased_at) AS ts FROM purchases").fetchone()["ts"]
+
+    return {
+        "users": {
+            "total": user_total,
+            "admins": role_counts.get("admin", 0),
+            "devs": role_counts.get("dev", 0),
+            "users": role_counts.get("user", 0),
+        },
+        "submissions": {
+            "total": submissions_total,
+            "pending": submission_counts.get("pending", 0),
+            "approved": submission_counts.get("approved", 0),
+            "rejected": submission_counts.get("rejected", 0),
+        },
+        "apps": {
+            "total": apps_total,
+            "approved": apps_approved,
+            "pending": max(0, apps_total - apps_approved),
+        },
+        "purchases": {
+            "total": purchases_total["c"],
+            "revenue_total": float(purchases_total["total"] or 0),
+            "count_30d": purchases_30d["c"],
+            "revenue_30d": float(purchases_30d["total"] or 0),
+        },
+        "last_activity": {
+            "user": last_user,
+            "submission": last_submission,
+            "purchase": last_purchase,
+        },
+        "since_30d": since_30d,
+    }
 
 
 # ===============================
@@ -379,6 +345,7 @@ def _require_build_owner(build_id: int, user_id: int) -> dict:
     if int(row["owner_user_id"]) != int(user_id):
         raise HTTPException(403, "Not your app")
     return dict(row)
+
 
 # App anlegen
 @app.post("/api/dev/apps")
@@ -646,13 +613,6 @@ async def report_purchase(
 ):
     """Launcher meldet einen Kauf an den Distribution-Server."""
     with get_db() as db:
-        app = db.execute(
-            "SELECT price FROM apps WHERE id=?",
-            (int(payload.app_id),),
-        ).fetchone()
-        if not app:
-            raise HTTPException(404, "App not found")
-        server_price = float(app["price"] or 0.0)
         db.execute(
             """
             INSERT INTO purchases(app_id, user_id, price, purchased_at)
@@ -661,7 +621,7 @@ async def report_purchase(
             (
                 payload.app_id,
                 user["user_id"],
-                server_price,
+                float(payload.price),
                 datetime.utcnow().isoformat(),
             ),
         )
@@ -684,8 +644,7 @@ async def get_manifest(
     with get_db() as db:
         row = db.execute(
             """
-            SELECT b.manifest_url, a.id as app_id, a.owner_user_id, a.price
-            FROM builds b
+            SELECT b.manifest_url FROM builds b
             JOIN apps a ON a.id=b.app_id
             WHERE a.slug=? AND b.platform=? AND b.channel=? AND b.status='ready'
             ORDER BY b.id DESC LIMIT 1
@@ -694,19 +653,6 @@ async def get_manifest(
         ).fetchone()
         if not row:
             raise HTTPException(404, "No manifest")
-        # entitlement check: owner/admin, free app, or purchased
-        is_owner = int(row["owner_user_id"]) == int(user["user_id"])
-        is_admin = user.get("role") == "admin"
-        is_dev_owner = user.get("role") == "dev" and is_owner
-        price = float(row["price"] or 0.0)
-        has_access = is_admin or is_dev_owner or price <= 0.0
-        if not has_access:
-            purchase = db.execute(
-                "SELECT 1 FROM purchases WHERE app_id=? AND user_id=? LIMIT 1",
-                (int(row["app_id"]), int(user["user_id"])),
-            ).fetchone()
-            if not purchase:
-                raise HTTPException(403, "Purchase required")
 
     manifest_path = _safe_resolve(STORAGE_APPS.parent, Path(row["manifest_url"]))
     if not manifest_path.exists():
@@ -744,6 +690,7 @@ def list_submissions(status: str | None = None, user=Depends(require_admin)):
     if status:
         q += " WHERE status=?"
         params.append(status)
+    q += " ORDER BY created_at DESC, id DESC"
     with get_db() as db:
         rows = [dict(r) for r in db.execute(q, params).fetchall()]
     return {"items": rows}
@@ -798,6 +745,25 @@ def _read_chunk(hash_hex: str) -> bytes:
     return p.read_bytes()
 
 
+def _verify_manifest_file(f: dict) -> dict:
+    import hashlib as _hl
+
+    chunk_ok = True
+    for ch in f.get("chunks", []):
+        if _hl.sha256(_read_chunk(ch["sha256"])).hexdigest() != ch["sha256"]:
+            chunk_ok = False
+            break
+
+    file_ok = False
+    if chunk_ok and f.get("chunks"):
+        fh = _hl.sha256()
+        for ch in f["chunks"]:
+            fh.update(_read_chunk(ch["sha256"]))
+        file_ok = fh.hexdigest() == f.get("sha256")
+
+    return {"chunk_ok": chunk_ok, "file_ok": file_ok, "expected": f.get("sha256")}
+
+
 @admin.get("/submissions/{sid}/files")
 def list_submission_files(sid: int, user=Depends(require_admin)):
     # Liefert die Datei-Liste (aus dem Manifest)
@@ -805,9 +771,20 @@ def list_submission_files(sid: int, user=Depends(require_admin)):
         s = db.execute("SELECT * FROM submissions WHERE id=?", (sid,)).fetchone()
         if not s:
             raise HTTPException(404, "Not found")
-    mpath = STORAGE_APPS.parent / s["manifest_url"]
+    mpath = _safe_resolve(STORAGE_APPS.parent, Path(s["manifest_url"]))
     m = json.loads(mpath.read_text(encoding="utf-8"))
-    files = m.get("files", [])
+    files = []
+    for f in m.get("files", []):
+        chunks = f.get("chunks") or []
+        chunk_bytes = sum(ch.get("size", 0) or 0 for ch in chunks)
+        files.append(
+            {
+                **f,
+                "chunks": chunks,
+                "chunk_count": len(chunks),
+                "chunk_bytes": chunk_bytes,
+            }
+        )
     return {"files": files, "app": m.get("app"), "version": m.get("version")}
 
 
@@ -818,7 +795,7 @@ def download_submission_file(sid: int, path: str, user=Depends(require_admin)):
         s = db.execute("SELECT * FROM submissions WHERE id=?", (sid,)).fetchone()
         if not s:
             raise HTTPException(404, "Not found")
-    mpath = STORAGE_APPS.parent / s["manifest_url"]
+    mpath = _safe_resolve(STORAGE_APPS.parent, Path(s["manifest_url"]))
     m = json.loads(mpath.read_text(encoding="utf-8"))
     f = next((x for x in m.get("files", []) if x.get("path") == path), None)
     if not f:
@@ -848,32 +825,56 @@ def download_submission_file(sid: int, path: str, user=Depends(require_admin)):
 @admin.post("/submissions/{sid}/files/verify")
 def verify_submission_file(sid: int, path: str, user=Depends(require_admin)):
     # Prüft Chunk-Hashes und den finalen Datei-Hash
-    import hashlib as _hl
+    with get_db() as db:
+        s = db.execute("SELECT * FROM submissions WHERE id=?", (sid,)).fetchone()
+        if not s:
+            raise HTTPException(404, "Not found")
+    mpath = _safe_resolve(STORAGE_APPS.parent, Path(s["manifest_url"]))
+    m = json.loads(mpath.read_text(encoding="utf-8"))
+    f = next((x for x in m.get("files", []) if x.get("path") == path), None)
+    if not f:
+        raise HTTPException(404, "File not in manifest")
+    return _verify_manifest_file(f)
+
+
+@admin.post("/submissions/{sid}/files/verify-batch")
+def verify_submission_files_batch(
+    sid: int,
+    payload: dict = Body(...),
+    user=Depends(require_admin),
+):
+    paths = payload.get("paths") if isinstance(payload, dict) else None
+    if not isinstance(paths, list):
+        raise HTTPException(400, "paths list required")
 
     with get_db() as db:
         s = db.execute("SELECT * FROM submissions WHERE id=?", (sid,)).fetchone()
         if not s:
             raise HTTPException(404, "Not found")
-    mpath = STORAGE_APPS.parent / s["manifest_url"]
+    mpath = _safe_resolve(STORAGE_APPS.parent, Path(s["manifest_url"]))
     m = json.loads(mpath.read_text(encoding="utf-8"))
-    f = next((x for x in m.get("files", []) if x.get("path") == path), None)
-    if not f:
-        raise HTTPException(404, "File not in manifest")
+    files = {f.get("path"): f for f in m.get("files", []) if f.get("path")}
 
-    chunk_ok = True
-    for ch in f["chunks"]:
-        if _hl.sha256(_read_chunk(ch["sha256"])).hexdigest() != ch["sha256"]:
-            chunk_ok = False
-            break
+    results = []
+    ok_count = 0
+    for path in paths:
+        f = files.get(path)
+        if not f:
+            results.append({"path": path, "error": "not_in_manifest"})
+            continue
+        try:
+            result = _verify_manifest_file(f)
+        except HTTPException as exc:
+            results.append({"path": path, "error": str(exc.detail)})
+            continue
+        except Exception:
+            results.append({"path": path, "error": "verify_failed"})
+            continue
+        if result.get("chunk_ok") and result.get("file_ok"):
+            ok_count += 1
+        results.append({"path": path, **result})
 
-    file_ok = False
-    if chunk_ok:
-        fh = _hl.sha256()
-        for ch in f["chunks"]:
-            fh.update(_read_chunk(ch["sha256"]))
-        file_ok = fh.hexdigest() == f.get("sha256")
-
-    return {"chunk_ok": chunk_ok, "file_ok": file_ok, "expected": f.get("sha256")}
+    return {"results": results, "ok_count": ok_count, "total": len(paths)}
 
 
 @admin.get("/submissions/{sid}/files/zip")
@@ -883,7 +884,7 @@ def download_submission_zip(sid: int, user=Depends(require_admin)):
         s = db.execute("SELECT * FROM submissions WHERE id=?", (sid,)).fetchone()
         if not s:
             raise HTTPException(404, "Not found")
-    mpath = STORAGE_APPS.parent / s["manifest_url"]
+    mpath = _safe_resolve(STORAGE_APPS.parent, Path(s["manifest_url"]))
     m = json.loads(mpath.read_text(encoding="utf-8"))
     files = m.get("files", [])
     app_name = m.get("app", "app")

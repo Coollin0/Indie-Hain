@@ -5,7 +5,8 @@ from PySide6.QtCore import Qt, QSize, Signal, QObject, QEvent, QPropertyAnimatio
 from PySide6.QtGui import QIcon, QPixmap
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QScrollArea, QFrame, QGridLayout, QToolButton,
-    QLabel, QHBoxLayout, QSizePolicy, QGraphicsOpacityEffect, QPushButton
+    QLabel, QHBoxLayout, QSizePolicy, QGraphicsOpacityEffect, QPushButton,
+    QLineEdit, QCheckBox
 )
 from shiboken6 import isValid as qt_is_valid
 from services.env import abs_url
@@ -18,6 +19,7 @@ class LibraryPage(QWidget):
     uninstall_requested = Signal(dict)  # ruft Deinstallation auf
     open_requested = Signal(dict)       # öffnet Installationsordner
     rescan_requested = Signal()         # Library/Installationen neu scannen
+    legacy_path_requested = Signal()   # Legacy-Installationspfad hinzufügen
 
     CARD_W = 180
     COVER_H = 240
@@ -29,6 +31,9 @@ class LibraryPage(QWidget):
         self._items: List[Dict] = []
         self._cards: list[QWidget] = []
         self._ph_pm: QPixmap | None = None
+        self._visible_items: List[Dict] = []
+        self._empty_default = "Noch keine Spiele in deiner Bibliothek."
+        self._missing_count = 0
 
         root = QVBoxLayout(self)
         root.setContentsMargins(24, 16, 24, 16)
@@ -50,8 +55,48 @@ class LibraryPage(QWidget):
             "color:#eaeaea;background:#1b1b1b;}"
             "QPushButton:hover{border-color:rgba(255,255,255,0.28);}"
         )
+        self.btn_add_path = QPushButton("Pfad hinzufügen")
+        self.btn_add_path.setCursor(Qt.PointingHandCursor)
+        self.btn_add_path.setStyleSheet(
+            "QPushButton{padding:6px 12px;border-radius:10px;border:1px solid rgba(255,255,255,0.12);"
+            "color:#eaeaea;background:#1b1b1b;}"
+            "QPushButton:hover{border-color:rgba(255,255,255,0.28);}"
+        )
+        header_row.addWidget(self.btn_add_path, alignment=Qt.AlignRight)
         header_row.addWidget(self.btn_rescan, alignment=Qt.AlignRight)
         root.addLayout(header_row)
+
+        filter_row = QHBoxLayout()
+        filter_row.setContentsMargins(0, 0, 0, 0)
+        filter_row.setSpacing(12)
+
+        self.search_input = QLineEdit()
+        self.search_input.setPlaceholderText("Suche nach Titel, Slug ...")
+        self.search_input.setClearButtonEnabled(True)
+        self.search_input.setStyleSheet(
+            "QLineEdit{padding:8px 12px;border-radius:12px;border:1px solid rgba(255,255,255,0.12);"
+            "color:#eaeaea;background:#151515;}"
+            "QLineEdit:focus{border-color:rgba(255,255,255,0.28);}"
+        )
+        filter_row.addWidget(self.search_input, 1)
+
+        self.chk_installed = QCheckBox("Nur installiert")
+        self.chk_installed.setStyleSheet("QCheckBox{color:#c8c8c8;}")
+        filter_row.addWidget(self.chk_installed, alignment=Qt.AlignRight)
+
+        self.result_lbl = QLabel("")
+        self.result_lbl.setStyleSheet("color:#a8a8a8; font-size:12px;")
+        filter_row.addWidget(self.result_lbl, alignment=Qt.AlignRight)
+
+        self.installed_lbl = QLabel("")
+        self.installed_lbl.setStyleSheet("color:#8fd3b6; font-size:12px;")
+        filter_row.addWidget(self.installed_lbl, alignment=Qt.AlignRight)
+
+        self.missing_lbl = QLabel("")
+        self.missing_lbl.setStyleSheet("color:#f0c66b; font-size:12px;")
+        filter_row.addWidget(self.missing_lbl, alignment=Qt.AlignRight)
+
+        root.addLayout(filter_row)
 
         self.scroll = QScrollArea(); self.scroll.setWidgetResizable(True); self.scroll.setFrameShape(QFrame.NoFrame)
         root.addWidget(self.scroll, 1)
@@ -63,7 +108,7 @@ class LibraryPage(QWidget):
         self.grid.setVerticalSpacing(self.VSPACE)
         self.scroll.setWidget(self.grid_host)
 
-        self.empty_lbl = QLabel("Noch keine Spiele in deiner Bibliothek.")
+        self.empty_lbl = QLabel(self._empty_default)
         self.empty_lbl.setAlignment(Qt.AlignCenter)
         self.empty_lbl.setStyleSheet("color:#a8a8a8; padding:32px; font-size:14px;")
         self.empty_lbl.hide()
@@ -72,15 +117,21 @@ class LibraryPage(QWidget):
         self._img = NetImage(self)
         self.scroll.viewport().installEventFilter(self)
         self.btn_rescan.clicked.connect(self.rescan_requested.emit)
+        self.btn_add_path.clicked.connect(self.legacy_path_requested.emit)
+        self.search_input.textChanged.connect(self._apply_filters)
+        self.chk_installed.toggled.connect(self._apply_filters)
 
     # API
     def set_items(self, items: List[Dict]):
         self._items = list(items or [])
-        self._build_cards()
-        self._relayout()
+        self._apply_filters()
 
     def set_games(self, games: List[Dict]):
         self.set_items(games)
+
+    def set_missing_count(self, count: int):
+        self._missing_count = max(0, int(count))
+        self._update_count()
 
     # Build/Layout
     def _build_cards(self):
@@ -92,13 +143,16 @@ class LibraryPage(QWidget):
                 w.deleteLater()
         self._cards.clear()
 
-        if not self._items:
+        if not self._visible_items:
+            self.empty_lbl.setText(
+                self._empty_default if not self._items else "Keine Treffer."
+            )
             self.grid_host.hide(); self.empty_lbl.show()
             return
 
         self.empty_lbl.hide(); self.grid_host.show()
 
-        for g in self._items:
+        for g in self._visible_items:
             self._cards.append(self._create_card(g))
 
     def _relayout(self):
@@ -115,6 +169,43 @@ class LibraryPage(QWidget):
         if obj is self.scroll.viewport() and ev.type() == QEvent.Resize:
             self._relayout()
         return super().eventFilter(obj, ev)
+
+    def _apply_filters(self):
+        self._visible_items = self._filtered_items()
+        self._build_cards()
+        self._relayout()
+        self._update_count()
+
+    def _filtered_items(self) -> List[Dict]:
+        query = self.search_input.text().strip().lower()
+        installed_only = self.chk_installed.isChecked()
+        filtered: List[Dict] = []
+        for item in self._items:
+            if installed_only and not item.get("installed"):
+                continue
+            if query:
+                title = str(item.get("title") or "").lower()
+                slug = str(item.get("slug") or "").lower()
+                if query not in title and query not in slug:
+                    continue
+            filtered.append(item)
+        return filtered
+
+    def _update_count(self):
+        total = len(self._items)
+        visible = len(self._visible_items)
+        installed = sum(1 for item in self._items if item.get("installed"))
+        if total == 0:
+            self.result_lbl.setText("")
+            self.installed_lbl.setText("")
+            self.missing_lbl.setText("")
+        else:
+            self.result_lbl.setText(f"{visible} von {total}")
+            self.installed_lbl.setText(f"Installiert: {installed}")
+            if self._missing_count:
+                self.missing_lbl.setText(f"Fehlend: {self._missing_count}")
+            else:
+                self.missing_lbl.setText("")
 
     # Card
     def _create_card(self, game: Dict) -> QWidget:

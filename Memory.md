@@ -1,11 +1,14 @@
 ## Letzter Stand (2026-02-11)
-- Library hat Rescan-Button sowie Ordner-Shortcut je Game; GUI öffnet Installationspfade direkt.
-- Admin Dashboard unterstützt Auswahl + Bulk-Approve/Reject für Submissions inkl. Selektions-Toolbar.
+- Admin Dashboard: SLA-Filterchips (>24h, >72h) und Verify-Summary inkl. Fehleranzeige pro Datei.
+- Backend: Batch-Verify bricht nicht mehr komplett ab, sondern meldet Fehler pro Datei.
+- Library: Legacy-Installpfade + fehlende Installationen bleiben sichtbar im Header.
 
 ## Offene naechste Aufgaben
-- Optional: Backend-Admin-Overview-Endpoint fuer KPIs (Revenue, neue Users, aktive Submissions).
-- Optional: Library-Reparaturfunktion, die fehlende Installationspfade automatisch den Legacy-Pfaden hinzufuegt.
+- Optional: Library-Reparatur-Assistent (fehlende Spiele anhand Ordner-Suche wiederfinden).
+- Optional: Dashboard-Fehlerliste exportierbar machen (Copy/Download).
+- Optional: SLA-Filter in der URL oder Session speichern.
 
 ## Aktuelle Architektur-Situation
-- Launcher nutzt lokale SQLite-DB in `~/.indie-hain`, Installationspfade ueber `services/env.py` (inkl. Legacy-Liste).
+- Launcher nutzt lokale SQLite-DB in `~/.indie-hain`, Installationspfad in `services/env.py` inkl. Legacy-Liste und Settings.
+- Backend bleibt FastAPI + SQLite; Admin-Tools lesen Manifeste/Storage direkt und schützen Pfad-Zugriffe.
 - Dashboard ist Next.js mit zentraler `apiFetch`-Logik und Session-Tokens in `sessionStorage`.

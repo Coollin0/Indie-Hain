@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 const API_BASE =
   process.env.NEXT_PUBLIC_API_BASE ||
@@ -23,6 +23,7 @@ type Submission = {
   channel: string;
   status: string;
   note?: string;
+  created_at?: string;
 };
 
 type Game = {
@@ -43,6 +44,47 @@ type Manifest = {
   channel: string;
   total_size: number;
   files: Array<{ path: string; size: number }>;
+};
+
+type SubmissionFile = {
+  path: string;
+  size: number;
+  sha256?: string;
+  chunks?: Array<{ sha256: string; size?: number }>;
+};
+
+type SubmissionFilesResponse = {
+  files: SubmissionFile[];
+  app?: string;
+  version?: string;
+};
+
+type VerifyBatchResult = {
+  path: string;
+  chunk_ok?: boolean;
+  file_ok?: boolean;
+  expected?: string;
+  error?: string;
+};
+
+type VerifyBatchResponse = {
+  results: VerifyBatchResult[];
+  ok_count?: number;
+  total?: number;
+};
+
+type Overview = {
+  users: { total: number; admins: number; devs: number; users: number };
+  submissions: { total: number; pending: number; approved: number; rejected: number };
+  apps: { total: number; approved: number; pending: number };
+  purchases: {
+    total: number;
+    revenue_total: number;
+    count_30d: number;
+    revenue_30d: number;
+  };
+  last_activity: { user?: string | null; submission?: string | null; purchase?: string | null };
+  since_30d: string;
 };
 
 const TOKEN_KEY = "indie-hain-access";
@@ -97,11 +139,29 @@ export default function Home() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [lastSync, setLastSync] = useState<string | null>(null);
+  const [overview, setOverview] = useState<Overview | null>(null);
+  const [overviewSync, setOverviewSync] = useState<string | null>(null);
 
   const [users, setUsers] = useState<User[]>([]);
   const [submissions, setSubmissions] = useState<Submission[]>([]);
   const [games, setGames] = useState<Game[]>([]);
   const [manifest, setManifest] = useState<Manifest | null>(null);
+  const [filesPanel, setFilesPanel] = useState<{
+    submission: Submission;
+    info: SubmissionFilesResponse;
+  } | null>(null);
+  const [fileQuery, setFileQuery] = useState("");
+  const [fileVerify, setFileVerify] = useState<Record<string, {
+    chunk_ok: boolean;
+    file_ok: boolean;
+    expected?: string;
+    error?: string;
+  }>>({});
+  const [fileLoading, setFileLoading] = useState<string | null>(null);
+  const [fileVerifyProgress, setFileVerifyProgress] = useState<{
+    total: number;
+    done: number;
+  } | null>(null);
   const [resetPassword, setResetPassword] = useState<{
     user: User;
     password: string;
@@ -115,9 +175,11 @@ export default function Home() {
   >("pending");
   const [submissionPlatform, setSubmissionPlatform] = useState("all");
   const [submissionChannel, setSubmissionChannel] = useState("all");
+  const [submissionSlaFilter, setSubmissionSlaFilter] = useState<"all" | "warn" | "crit">("all");
   const [selectedSubmissionIds, setSelectedSubmissionIds] = useState<number[]>([]);
   const [gameQuery, setGameQuery] = useState("");
   const [gamePrice, setGamePrice] = useState<"all" | "free" | "paid" | "sale">("all");
+  const [autoRefresh, setAutoRefresh] = useState(true);
 
   const isAuthed = !!accessToken && !!me;
 
@@ -164,15 +226,16 @@ export default function Home() {
     init();
   }, [accessToken, refreshToken]);
 
-  const loadData = async () => {
+  const loadData = useCallback(async () => {
     if (!accessToken) return;
     setLoading(true);
     setError(null);
     try {
-      const [usersRes, subsRes, gamesRes] = await Promise.all([
+      const [usersRes, subsRes, gamesRes, overviewRes] = await Promise.all([
         apiFetch("/api/admin/users", { method: "GET" }),
         apiFetch("/api/admin/submissions", { method: "GET" }),
         fetch(`${API_BASE}/api/public/apps`),
+        apiFetch("/api/admin/overview", { method: "GET" }),
       ]);
 
       if (!usersRes.ok) throw new Error("User-Liste konnte nicht geladen werden.");
@@ -182,11 +245,18 @@ export default function Home() {
       const usersData = await usersRes.json();
       const subsData = await subsRes.json();
       const gamesData = await gamesRes.json();
+      let overviewData: Overview | null = null;
+      if (overviewRes.ok) {
+        overviewData = await overviewRes.json();
+      }
 
       setUsers(usersData.items || []);
       setSubmissions(subsData.items || []);
       setGames(gamesData || []);
+      setOverview(overviewData);
       setSelectedSubmissionIds([]);
+      setManifest(null);
+      setFilesPanel(null);
       setLastSync(
         new Date().toLocaleString("de-DE", {
           day: "2-digit",
@@ -196,18 +266,37 @@ export default function Home() {
           minute: "2-digit",
         })
       );
+      if (overviewData) {
+        setOverviewSync(
+          new Date().toLocaleString("de-DE", {
+            day: "2-digit",
+            month: "2-digit",
+            year: "numeric",
+            hour: "2-digit",
+            minute: "2-digit",
+          })
+        );
+      }
     } catch (err: any) {
       setError(err.message || "Fehler beim Laden.");
     } finally {
       setLoading(false);
     }
-  };
+  }, [accessToken]);
 
   useEffect(() => {
     if (isAuthed) {
       loadData();
     }
-  }, [isAuthed]);
+  }, [isAuthed, loadData]);
+
+  useEffect(() => {
+    if (!isAuthed || !autoRefresh) return;
+    const handle = window.setInterval(() => {
+      loadData();
+    }, 60000);
+    return () => window.clearInterval(handle);
+  }, [isAuthed, autoRefresh, loadData]);
 
   const login = async (identity: string, password: string) => {
     setError(null);
@@ -331,6 +420,158 @@ export default function Home() {
     }
   };
 
+  const downloadSubmissionZip = async (submission: Submission) => {
+    if (!accessToken) return;
+    setLoading(true);
+    try {
+      const res = await apiFetch(
+        `/api/admin/submissions/${submission.id}/files/zip`,
+        { method: "GET" }
+      );
+      if (!res.ok) throw new Error("ZIP konnte nicht geladen werden.");
+      const blob = await res.blob();
+      const disposition = res.headers.get("Content-Disposition") || "";
+      const match = disposition.match(/filename="?([^\";]+)"?/i);
+      const filename = match?.[1] || `submission-${submission.id}.zip`;
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(url);
+    } catch (err: any) {
+      setError(err.message || "ZIP Download fehlgeschlagen.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const loadSubmissionFiles = async (submission: Submission) => {
+    if (!accessToken) return;
+    setLoading(true);
+    try {
+      const res = await apiFetch(
+        `/api/admin/submissions/${submission.id}/files`,
+        { method: "GET" }
+      );
+      if (!res.ok) throw new Error("Dateiliste konnte nicht geladen werden.");
+      const data = (await res.json()) as SubmissionFilesResponse;
+      setFilesPanel({ submission, info: data });
+      setFileQuery("");
+      setFileVerify({});
+      setFileVerifyProgress(null);
+    } catch (err: any) {
+      setError(err.message || "Dateiliste konnte nicht geladen werden.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const downloadSubmissionFile = async (submission: Submission, path: string) => {
+    if (!accessToken) return;
+    setFileLoading(path);
+    try {
+      const res = await apiFetch(
+        `/api/admin/submissions/${submission.id}/files/download?path=${encodeURIComponent(path)}`,
+        { method: "GET" }
+      );
+      if (!res.ok) throw new Error("Datei konnte nicht geladen werden.");
+      const blob = await res.blob();
+      const disposition = res.headers.get("Content-Disposition") || "";
+      const match = disposition.match(/filename="?([^\";]+)"?/i);
+      const filename = match?.[1] || path.split("/").pop() || `file-${submission.id}`;
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(url);
+    } catch (err: any) {
+      setError(err.message || "Datei Download fehlgeschlagen.");
+    } finally {
+      setFileLoading(null);
+    }
+  };
+
+  const verifySubmissionFile = async (submission: Submission, path: string) => {
+    if (!accessToken) return;
+    setFileLoading(path);
+    try {
+      const res = await apiFetch(
+        `/api/admin/submissions/${submission.id}/files/verify?path=${encodeURIComponent(path)}`,
+        { method: "POST" }
+      );
+      if (!res.ok) throw new Error("Verify fehlgeschlagen.");
+      const data = await res.json();
+      setFileVerify((prev) => ({ ...prev, [`${submission.id}:${path}`]: data }));
+    } catch (err: any) {
+      setError(err.message || "Verify fehlgeschlagen.");
+    } finally {
+      setFileLoading(null);
+    }
+  };
+
+  const verifyAllSubmissionFiles = async () => {
+    if (!accessToken || !filesPanel?.info?.files?.length) return;
+    const targets = filteredFiles.length ? filteredFiles : filesPanel.info.files;
+    setFileLoading("__all__");
+    setError(null);
+    setFileVerifyProgress({ total: targets.length, done: 0 });
+    try {
+      const batchRes = await apiFetch(
+        `/api/admin/submissions/${filesPanel.submission.id}/files/verify-batch`,
+        { method: "POST", body: JSON.stringify({ paths: targets.map((f) => f.path) }) }
+      );
+      if (batchRes.ok) {
+        const data = (await batchRes.json()) as VerifyBatchResponse;
+        const results = data.results || [];
+        setFileVerify((prev) => {
+          const next = { ...prev };
+          for (const result of results) {
+            if (!result.path) continue;
+            next[`${filesPanel.submission.id}:${result.path}`] = {
+              chunk_ok: !!result.chunk_ok,
+              file_ok: !!result.file_ok,
+              expected: result.expected,
+              error: result.error,
+            };
+          }
+          return next;
+        });
+        setFileVerifyProgress({ total: targets.length, done: targets.length });
+        return;
+      }
+
+      for (const file of targets) {
+        const res = await apiFetch(
+          `/api/admin/submissions/${filesPanel.submission.id}/files/verify?path=${encodeURIComponent(
+            file.path
+          )}`,
+          { method: "POST" }
+        );
+        if (!res.ok) {
+          throw new Error(`Verify fehlgeschlagen: ${file.path}`);
+        }
+        const data = await res.json();
+        setFileVerify((prev) => ({
+          ...prev,
+          [`${filesPanel.submission.id}:${file.path}`]: data,
+        }));
+        setFileVerifyProgress((prev) =>
+          prev ? { ...prev, done: Math.min(prev.done + 1, prev.total) } : prev
+        );
+      }
+    } catch (err: any) {
+      setError(err.message || "Verify fehlgeschlagen.");
+    } finally {
+      setFileLoading(null);
+    }
+  };
+
   const toggleSubmissionSelection = (id: number) => {
     setSelectedSubmissionIds((prev) =>
       prev.includes(id) ? prev.filter((item) => item !== id) : [...prev, id]
@@ -356,12 +597,21 @@ export default function Home() {
     if (!selectedSubmissionIds.length) return;
     const verb = approve ? "approve" : "reject";
     const label = approve ? "approve" : "reject";
-    if (!confirm(`Ausgewählte Submissions wirklich ${label}?`)) return;
+    const targetStatus = approve ? "approved" : "rejected";
+    const targets = selectedSubmissionIds.filter((id) => {
+      const item = submissions.find((submission) => submission.id === id);
+      return item ? item.status !== targetStatus : false;
+    });
+    if (!targets.length) {
+      setError("Auswahl enthält keine passenden Submissions.");
+      return;
+    }
+    if (!confirm(`${targets.length} Submissions wirklich ${label}?`)) return;
     setLoading(true);
     setError(null);
     try {
       let failed = 0;
-      for (const id of selectedSubmissionIds) {
+      for (const id of targets) {
         const res = await apiFetch(`/api/admin/submissions/${id}/${verb}`, { method: "POST" });
         if (!res.ok) failed += 1;
       }
@@ -378,13 +628,52 @@ export default function Home() {
   };
 
   const stats = useMemo(() => {
-    const pending = submissions.filter((s) => s.status === "pending").length;
+    const pending =
+      overview?.submissions?.pending ?? submissions.filter((s) => s.status === "pending").length;
+    const userCount = overview?.users?.total ?? users.length;
+    const gameCount = overview?.apps?.total ?? games.length;
     return [
-      { label: "Users", value: users.length },
+      { label: "Users", value: userCount },
       { label: "Anfragen", value: pending },
-      { label: "Games", value: games.length },
+      { label: "Games", value: gameCount },
     ];
-  }, [users, submissions, games]);
+  }, [overview, users, submissions, games]);
+
+  const overviewCards = useMemo(() => {
+    if (!overview) return [];
+    return [
+      {
+        label: "Umsatz gesamt",
+        value: formatCurrency(overview.purchases.revenue_total),
+        meta: `${overview.purchases.total} Käufe`,
+      },
+      {
+        label: "Umsatz 30 Tage",
+        value: formatCurrency(overview.purchases.revenue_30d),
+        meta: `${overview.purchases.count_30d} Käufe`,
+      },
+      {
+        label: "Apps freigegeben",
+        value: `${overview.apps.approved}`,
+        meta: `${overview.apps.pending} pending`,
+      },
+      {
+        label: "Submissions offen",
+        value: `${overview.submissions.pending}`,
+        meta: `${overview.submissions.total} total`,
+      },
+      {
+        label: "Admins",
+        value: `${overview.users.admins}`,
+        meta: `${overview.users.devs} Devs`,
+      },
+      {
+        label: "Users total",
+        value: `${overview.users.total}`,
+        meta: `${overview.users.users} User`,
+      },
+    ];
+  }, [overview]);
 
   const platformOptions = useMemo(() => {
     const values = new Set(submissions.map((submission) => submission.platform).filter(Boolean));
@@ -394,6 +683,39 @@ export default function Home() {
   const channelOptions = useMemo(() => {
     const values = new Set(submissions.map((submission) => submission.channel).filter(Boolean));
     return Array.from(values).sort();
+  }, [submissions]);
+
+  const submissionCounts = useMemo(() => {
+    if (overview?.submissions) {
+      return {
+        pending: overview.submissions.pending,
+        approved: overview.submissions.approved,
+        rejected: overview.submissions.rejected,
+        total: overview.submissions.total,
+      };
+    }
+    return submissions.reduce(
+      (acc, submission) => {
+        const status = submission.status as "pending" | "approved" | "rejected";
+        if (status in acc) acc[status] += 1;
+        acc.total += 1;
+        return acc;
+      },
+      { pending: 0, approved: 0, rejected: 0, total: 0 }
+    );
+  }, [overview, submissions]);
+
+  const submissionSlaCounts = useMemo(() => {
+    return submissions.reduce(
+      (acc, submission) => {
+        if (submission.status !== "pending") return acc;
+        const tone = submissionAgeTone(submission.created_at);
+        if (tone === "warn") acc.warn += 1;
+        if (tone === "crit") acc.crit += 1;
+        return acc;
+      },
+      { warn: 0, crit: 0 }
+    );
   }, [submissions]);
 
   const filteredUsers = useMemo(() => {
@@ -411,10 +733,16 @@ export default function Home() {
 
   const filteredSubmissions = useMemo(() => {
     const query = submissionQuery.trim().toLowerCase();
-    return submissions.filter((submission) => {
+    const filtered = submissions.filter((submission) => {
       if (submissionStatus !== "all" && submission.status !== submissionStatus) return false;
       if (submissionPlatform !== "all" && submission.platform !== submissionPlatform) return false;
       if (submissionChannel !== "all" && submission.channel !== submissionChannel) return false;
+      if (submissionSlaFilter !== "all") {
+        if (submission.status !== "pending") return false;
+        const tone = submissionAgeTone(submission.created_at);
+        if (submissionSlaFilter === "warn" && tone === "ok") return false;
+        if (submissionSlaFilter === "crit" && tone !== "crit") return false;
+      }
       if (!query) return true;
       return (
         submission.app_slug.toLowerCase().includes(query) ||
@@ -423,7 +751,20 @@ export default function Home() {
         submission.channel.toLowerCase().includes(query)
       );
     });
-  }, [submissions, submissionQuery, submissionStatus, submissionPlatform, submissionChannel]);
+    return [...filtered].sort((a, b) => {
+      const ta = a.created_at ? new Date(a.created_at).getTime() : 0;
+      const tb = b.created_at ? new Date(b.created_at).getTime() : 0;
+      if (ta !== tb) return tb - ta;
+      return (b.id || 0) - (a.id || 0);
+    });
+  }, [
+    submissions,
+    submissionQuery,
+    submissionStatus,
+    submissionPlatform,
+    submissionChannel,
+    submissionSlaFilter,
+  ]);
 
   const selectedSubmissionSet = useMemo(
     () => new Set(selectedSubmissionIds),
@@ -432,7 +773,7 @@ export default function Home() {
 
   useEffect(() => {
     setSelectedSubmissionIds([]);
-  }, [submissionQuery, submissionStatus, submissionPlatform, submissionChannel]);
+  }, [submissionQuery, submissionStatus, submissionPlatform, submissionChannel, submissionSlaFilter]);
 
   const filteredGames = useMemo(() => {
     const query = gameQuery.trim().toLowerCase();
@@ -448,6 +789,42 @@ export default function Home() {
       );
     });
   }, [games, gameQuery, gamePrice]);
+
+  const filteredFiles = useMemo(() => {
+    if (!filesPanel?.info?.files) return [];
+    const query = fileQuery.trim().toLowerCase();
+    if (!query) return filesPanel.info.files;
+    return filesPanel.info.files.filter((file) =>
+      file.path.toLowerCase().includes(query)
+    );
+  }, [filesPanel, fileQuery]);
+
+  const totalFilesSize = useMemo(() => {
+    if (!filesPanel?.info?.files?.length) return 0;
+    return filesPanel.info.files.reduce((sum, file) => sum + (file.size || 0), 0);
+  }, [filesPanel]);
+
+  const fileVerifySummary = useMemo(() => {
+    if (!filesPanel?.info?.files?.length) return null;
+    let okCount = 0;
+    let warnCount = 0;
+    let errorCount = 0;
+    let checked = 0;
+    for (const file of filesPanel.info.files) {
+      const key = `${filesPanel.submission.id}:${file.path}`;
+      const verify = fileVerify[key];
+      if (!verify) continue;
+      checked += 1;
+      if (verify.error) {
+        errorCount += 1;
+      } else if (verify.chunk_ok && verify.file_ok) {
+        okCount += 1;
+      } else {
+        warnCount += 1;
+      }
+    }
+    return { okCount, warnCount, errorCount, checked, total: filesPanel.info.files.length };
+  }, [filesPanel, fileVerify]);
 
   return (
     <div className="min-h-screen px-6 py-10">
@@ -523,6 +900,56 @@ export default function Home() {
               ))}
             </section>
 
+            {overview ? (
+              <section className="card rounded-3xl p-6">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <p className="text-xs uppercase tracking-[0.3em] text-[var(--muted)]">
+                      Ops Snapshot
+                    </p>
+                    <p className="mt-1 text-sm text-[var(--muted)]">
+                      Live KPI-Stand aus dem Backend.
+                    </p>
+                  </div>
+                  <div className="text-xs text-[var(--muted)]">
+                    Stand: <span className="text-[var(--ink)]">{overviewSync || "—"}</span>
+                  </div>
+                </div>
+                <div className="mt-4 grid gap-3 md:grid-cols-3">
+                  {overviewCards.map((card) => (
+                    <div
+                      key={card.label}
+                      className="rounded-2xl border border-[var(--stroke)] bg-[var(--bg-soft)] px-4 py-3 text-sm text-[var(--muted)]"
+                    >
+                      <p className="uppercase tracking-[0.2em]">{card.label}</p>
+                      <p className="mt-2 text-xl text-[var(--ink)]">{card.value}</p>
+                      <p className="mt-1 text-xs text-[var(--muted)]">{card.meta}</p>
+                    </div>
+                  ))}
+                </div>
+                <div className="mt-4 grid gap-3 text-xs text-[var(--muted)] md:grid-cols-3">
+                  <div className="rounded-2xl border border-[var(--stroke)] bg-[var(--bg-soft)] px-4 py-3">
+                    <p className="uppercase tracking-[0.2em]">Letzter User</p>
+                    <p className="mt-2 text-sm text-[var(--ink)]">
+                      {formatTimestamp(overview.last_activity?.user)}
+                    </p>
+                  </div>
+                  <div className="rounded-2xl border border-[var(--stroke)] bg-[var(--bg-soft)] px-4 py-3">
+                    <p className="uppercase tracking-[0.2em]">Letzte Submission</p>
+                    <p className="mt-2 text-sm text-[var(--ink)]">
+                      {formatTimestamp(overview.last_activity?.submission)}
+                    </p>
+                  </div>
+                  <div className="rounded-2xl border border-[var(--stroke)] bg-[var(--bg-soft)] px-4 py-3">
+                    <p className="uppercase tracking-[0.2em]">Letzter Kauf</p>
+                    <p className="mt-2 text-sm text-[var(--ink)]">
+                      {formatTimestamp(overview.last_activity?.purchase)}
+                    </p>
+                  </div>
+                </div>
+              </section>
+            ) : null}
+
             <section className="card rounded-3xl p-6">
               <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--stroke)] pb-4">
                 <div className="flex items-center gap-2">
@@ -553,6 +980,7 @@ export default function Home() {
                       setSubmissionStatus("pending");
                       setSubmissionPlatform("all");
                       setSubmissionChannel("all");
+                      setSubmissionSlaFilter("all");
                       setGameQuery("");
                       setGamePrice("all");
                     }}
@@ -566,6 +994,16 @@ export default function Home() {
                   >
                     {loading ? "Lädt..." : "Aktualisieren"}
                   </button>
+                  <button
+                    onClick={() => setAutoRefresh((prev) => !prev)}
+                    className={`rounded-full px-4 py-2 text-sm transition ${
+                      autoRefresh
+                        ? "bg-[var(--accent)] text-black"
+                        : "border border-[var(--stroke)] text-[var(--muted)] hover:border-[var(--accent)]"
+                    }`}
+                  >
+                    Auto-Refresh {autoRefresh ? "On" : "Off"}
+                  </button>
                 </div>
               </div>
 
@@ -577,7 +1015,7 @@ export default function Home() {
 
               {tab === "users" ? (
                 <>
-                  <div className="mt-5 grid gap-3 md:grid-cols-3">
+                  <div className="mt-5 grid gap-3 md:grid-cols-4">
                     <div className="space-y-2">
                       <label className="text-xs uppercase tracking-[0.2em] text-[var(--muted)]">
                         Suche
@@ -623,7 +1061,7 @@ export default function Home() {
 
               {tab === "submissions" ? (
                 <>
-                  <div className="mt-5 grid gap-3 md:grid-cols-4">
+                  <div className="mt-5 grid gap-3 md:grid-cols-5">
                     <div className="space-y-2">
                       <label className="text-xs uppercase tracking-[0.2em] text-[var(--muted)]">
                         Suche
@@ -686,6 +1124,88 @@ export default function Home() {
                         ))}
                       </select>
                     </div>
+                    <div className="rounded-2xl border border-[var(--stroke)] bg-[var(--bg-soft)] px-4 py-3 text-sm text-[var(--muted)]">
+                      <p className="uppercase tracking-[0.2em]">Treffer</p>
+                      <p className="mt-2 text-xl text-[var(--ink)]">
+                        {filteredSubmissions.length} Anfragen
+                      </p>
+                    </div>
+                  </div>
+                  <div className="mt-4 flex flex-wrap items-center gap-2 text-xs text-[var(--muted)]">
+                    <span className="uppercase tracking-[0.2em]">Quick Status</span>
+                    <button
+                      onClick={() => setSubmissionStatus("pending")}
+                      className={`rounded-full px-3 py-1 uppercase tracking-[0.2em] ${
+                        submissionStatus === "pending"
+                          ? "bg-[var(--accent)] text-black"
+                          : "border border-[var(--stroke)] hover:border-[var(--accent)]"
+                      }`}
+                    >
+                      Pending {submissionCounts.pending}
+                    </button>
+                    <button
+                      onClick={() => setSubmissionStatus("approved")}
+                      className={`rounded-full px-3 py-1 uppercase tracking-[0.2em] ${
+                        submissionStatus === "approved"
+                          ? "bg-[var(--accent-2)] text-black"
+                          : "border border-[var(--stroke)] hover:border-[var(--accent-2)]"
+                      }`}
+                    >
+                      Approved {submissionCounts.approved}
+                    </button>
+                    <button
+                      onClick={() => setSubmissionStatus("rejected")}
+                      className={`rounded-full px-3 py-1 uppercase tracking-[0.2em] ${
+                        submissionStatus === "rejected"
+                          ? "bg-[var(--danger)] text-black"
+                          : "border border-[var(--stroke)] hover:border-[var(--danger)]"
+                      }`}
+                    >
+                      Rejected {submissionCounts.rejected}
+                    </button>
+                    <button
+                      onClick={() => setSubmissionStatus("all")}
+                      className={`rounded-full px-3 py-1 uppercase tracking-[0.2em] ${
+                        submissionStatus === "all"
+                          ? "bg-[var(--bg-elev)] text-[var(--ink)]"
+                          : "border border-[var(--stroke)] hover:border-[var(--ink)]"
+                      }`}
+                    >
+                      Alle {submissionCounts.total}
+                    </button>
+                  </div>
+                  <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-[var(--muted)]">
+                    <span className="uppercase tracking-[0.2em]">SLA Filter</span>
+                    <button
+                      onClick={() => setSubmissionSlaFilter("warn")}
+                      className={`rounded-full px-3 py-1 uppercase tracking-[0.2em] ${
+                        submissionSlaFilter === "warn"
+                          ? "bg-[rgba(240,198,107,0.3)] text-[var(--accent-warm)]"
+                          : "border border-[var(--stroke)] hover:border-[var(--accent-warm)]"
+                      }`}
+                    >
+                      &gt;24h {submissionSlaCounts.warn + submissionSlaCounts.crit}
+                    </button>
+                    <button
+                      onClick={() => setSubmissionSlaFilter("crit")}
+                      className={`rounded-full px-3 py-1 uppercase tracking-[0.2em] ${
+                        submissionSlaFilter === "crit"
+                          ? "bg-[rgba(255,107,107,0.25)] text-[var(--danger)]"
+                          : "border border-[var(--stroke)] hover:border-[var(--danger)]"
+                      }`}
+                    >
+                      &gt;72h {submissionSlaCounts.crit}
+                    </button>
+                    <button
+                      onClick={() => setSubmissionSlaFilter("all")}
+                      className={`rounded-full px-3 py-1 uppercase tracking-[0.2em] ${
+                        submissionSlaFilter === "all"
+                          ? "bg-[var(--bg-elev)] text-[var(--ink)]"
+                          : "border border-[var(--stroke)] hover:border-[var(--ink)]"
+                      }`}
+                    >
+                      Alle
+                    </button>
                   </div>
                   <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-[var(--stroke)] bg-[var(--bg-soft)] px-4 py-3 text-sm">
                     <div className="text-[var(--muted)]">
@@ -734,6 +1254,8 @@ export default function Home() {
                     onApprove={(s) => approveSubmission(s, true)}
                     onReject={(s) => approveSubmission(s, false)}
                     onManifest={loadManifest}
+                    onFiles={loadSubmissionFiles}
+                    onDownloadZip={downloadSubmissionZip}
                   />
                 </>
               ) : null}
@@ -766,6 +1288,12 @@ export default function Home() {
                         <option value="paid">Paid</option>
                         <option value="sale">Sale</option>
                       </select>
+                    </div>
+                    <div className="rounded-2xl border border-[var(--stroke)] bg-[var(--bg-soft)] px-4 py-3 text-sm text-[var(--muted)]">
+                      <p className="uppercase tracking-[0.2em]">Treffer</p>
+                      <p className="mt-2 text-xl text-[var(--ink)]">
+                        {filteredGames.length} Games
+                      </p>
                     </div>
                   </div>
                   <GamesTable games={filteredGames} />
@@ -823,6 +1351,163 @@ export default function Home() {
                   ) : null}
                 </div>
               ) : null}
+            </div>
+          }
+        />
+      ) : null}
+
+      {filesPanel ? (
+        <Modal
+          title="Submission Files"
+          onClose={() => setFilesPanel(null)}
+          content={
+            <div className="space-y-3 text-sm text-[var(--muted)]">
+              <div className="grid gap-2 md:grid-cols-2">
+                <p>
+                  <span className="text-[var(--ink)]">App:</span>{" "}
+                  {filesPanel.info.app || filesPanel.submission.app_slug}
+                </p>
+                <p>
+                  <span className="text-[var(--ink)]">Version:</span>{" "}
+                  {filesPanel.info.version || filesPanel.submission.version}
+                </p>
+                <p>
+                  <span className="text-[var(--ink)]">Files:</span>{" "}
+                  {filesPanel.info.files?.length || 0}
+                </p>
+                <p>
+                  <span className="text-[var(--ink)]">Total Size:</span>{" "}
+                  {formatBytes(totalFilesSize)}
+                </p>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-3">
+                <input
+                  value={fileQuery}
+                  onChange={(e) => setFileQuery(e.target.value)}
+                  placeholder="Datei suchen..."
+                  className="w-full rounded-2xl border border-[var(--stroke)] bg-[var(--bg-soft)] px-4 py-2 text-sm text-[var(--ink)] outline-none focus:border-[var(--accent)] md:max-w-sm"
+                />
+                <button
+                  onClick={verifyAllSubmissionFiles}
+                  disabled={fileLoading === "__all__" || !filteredFiles.length}
+                  className="rounded-full border border-[var(--stroke)] px-3 py-1 text-[10px] uppercase tracking-[0.2em] text-[var(--muted)] disabled:opacity-50"
+                >
+                  {fileLoading === "__all__" ? "Prüft..." : "Verify gefilterte"}
+                </button>
+                {fileVerifyProgress ? (
+                  <div className="text-xs text-[var(--muted)]">
+                    Verify:{" "}
+                    <span className="text-[var(--ink)]">
+                      {fileVerifyProgress.done}/{fileVerifyProgress.total}
+                    </span>
+                  </div>
+                ) : null}
+                {fileVerifySummary ? (
+                  <div className="text-xs text-[var(--muted)]">
+                    Geprüft:{" "}
+                    <span className="text-[var(--ink)]">
+                      {fileVerifySummary.checked}/{fileVerifySummary.total}
+                    </span>{" "}
+                    · OK{" "}
+                    <span className="text-[var(--accent)]">{fileVerifySummary.okCount}</span>{" "}
+                    · Warn{" "}
+                    <span className="text-[var(--accent-warm)]">{fileVerifySummary.warnCount}</span>{" "}
+                    · Fehler{" "}
+                    <span className="text-[var(--danger)]">{fileVerifySummary.errorCount}</span>
+                  </div>
+                ) : null}
+                <div className="text-xs text-[var(--muted)]">
+                  Treffer:{" "}
+                  <span className="text-[var(--ink)]">{filteredFiles.length}</span>
+                </div>
+              </div>
+
+              <div className="max-h-[360px] space-y-2 overflow-auto rounded-2xl border border-[var(--stroke)] bg-[var(--bg-soft)] p-3 text-xs">
+                {filteredFiles.length ? (
+                  filteredFiles.map((file) => {
+                    const verifyKey = `${filesPanel.submission.id}:${file.path}`;
+                    const verify = fileVerify[verifyKey];
+                    const status =
+                      verify
+                        ? verify.error
+                          ? "Error"
+                          : verify.chunk_ok && verify.file_ok
+                          ? "OK"
+                          : verify.chunk_ok
+                          ? "Chunk OK"
+                          : "Fehler"
+                        : "—";
+                    return (
+                      <div
+                        key={file.path}
+                        className="flex flex-col gap-2 rounded-xl border border-[var(--stroke)]/60 bg-[var(--bg-elev)]/60 px-3 py-2"
+                      >
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <div className="min-w-0">
+                            <p className="truncate font-mono text-[var(--ink)]">{file.path}</p>
+                            <p className="text-[var(--muted)]">
+                              {formatBytes(file.size || 0)} · Status:{" "}
+                              <span className="text-[var(--ink)]">{status}</span>
+                            </p>
+                            {verify?.error ? (
+                              <p className="text-[var(--danger)]">Fehler: {verify.error}</p>
+                            ) : null}
+                            <p className="text-[var(--muted)]">
+                              {file.sha256 ? (
+                                <>
+                                  SHA: <span className="text-[var(--ink)]">{shortHash(file.sha256)}</span>
+                                </>
+                              ) : (
+                                "SHA: —"
+                              )}
+                              {" · "}Chunks: <span className="text-[var(--ink)]">{file.chunks?.length || 0}</span>
+                            </p>
+                          </div>
+                          <div className="flex flex-wrap gap-2">
+                            <button
+                              onClick={() =>
+                                navigator.clipboard.writeText(file.path)
+                              }
+                              className="rounded-full border border-[var(--stroke)] px-3 py-1 text-[10px] uppercase tracking-[0.2em] text-[var(--muted)]"
+                            >
+                              Copy Path
+                            </button>
+                            {file.sha256 ? (
+                              <button
+                                onClick={() => navigator.clipboard.writeText(file.sha256 || "")}
+                                className="rounded-full border border-[var(--stroke)] px-3 py-1 text-[10px] uppercase tracking-[0.2em] text-[var(--muted)]"
+                              >
+                                Copy SHA
+                              </button>
+                            ) : null}
+                            <button
+                              onClick={() =>
+                                verifySubmissionFile(filesPanel.submission, file.path)
+                              }
+                              disabled={fileLoading === file.path}
+                              className="rounded-full border border-[var(--stroke)] px-3 py-1 text-[10px] uppercase tracking-[0.2em] text-[var(--muted)] disabled:opacity-50"
+                            >
+                              {fileLoading === file.path ? "Prüft..." : "Verify"}
+                            </button>
+                            <button
+                              onClick={() =>
+                                downloadSubmissionFile(filesPanel.submission, file.path)
+                              }
+                              disabled={fileLoading === file.path}
+                              className="rounded-full bg-[var(--accent)] px-3 py-1 text-[10px] uppercase tracking-[0.2em] text-black disabled:opacity-50"
+                            >
+                              {fileLoading === file.path ? "Lädt..." : "Download"}
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })
+                ) : (
+                  <p className="text-[var(--muted)]">Keine Dateien gefunden.</p>
+                )}
+              </div>
             </div>
           }
         />
@@ -1007,6 +1692,8 @@ function SubmissionsTable({
   onApprove,
   onReject,
   onManifest,
+  onFiles,
+  onDownloadZip,
 }: {
   submissions: Submission[];
   selectedIds: Set<number>;
@@ -1016,6 +1703,8 @@ function SubmissionsTable({
   onApprove: (submission: Submission) => void;
   onReject: (submission: Submission) => void;
   onManifest: (submission: Submission) => void;
+  onFiles: (submission: Submission) => void;
+  onDownloadZip: (submission: Submission) => void;
 }) {
   if (!submissions.length) {
     return <p className="mt-6 text-sm text-[var(--muted)]">Keine Anfragen.</p>;
@@ -1036,6 +1725,8 @@ function SubmissionsTable({
         onApprove={onApprove}
         onReject={onReject}
         onManifest={onManifest}
+        onFiles={onFiles}
+        onDownloadZip={onDownloadZip}
       />
       <SubmissionSection
         title="Approved"
@@ -1048,6 +1739,8 @@ function SubmissionsTable({
         onApprove={onApprove}
         onReject={onReject}
         onManifest={onManifest}
+        onFiles={onFiles}
+        onDownloadZip={onDownloadZip}
       />
       <SubmissionSection
         title="Rejected"
@@ -1060,6 +1753,8 @@ function SubmissionsTable({
         onApprove={onApprove}
         onReject={onReject}
         onManifest={onManifest}
+        onFiles={onFiles}
+        onDownloadZip={onDownloadZip}
       />
     </div>
   );
@@ -1076,6 +1771,8 @@ function SubmissionSection({
   onApprove,
   onReject,
   onManifest,
+  onFiles,
+  onDownloadZip,
 }: {
   title: string;
   items: Submission[];
@@ -1087,9 +1784,24 @@ function SubmissionSection({
   onApprove: (submission: Submission) => void;
   onReject: (submission: Submission) => void;
   onManifest: (submission: Submission) => void;
+  onFiles: (submission: Submission) => void;
+  onDownloadZip: (submission: Submission) => void;
 }) {
   const ids = items.map((item) => item.id);
   const selectedCount = ids.filter((id) => selectedIds.has(id)).length;
+  const oldest = items.reduce<string | null>((acc, item) => {
+    if (!item.created_at) return acc;
+    if (!acc) return item.created_at;
+    const accTime = new Date(acc).getTime();
+    const itemTime = new Date(item.created_at).getTime();
+    return itemTime < accTime ? item.created_at : acc;
+  }, null);
+  const warnCount = items.filter(
+    (item) => submissionAgeTone(item.created_at) === "warn"
+  ).length;
+  const critCount = items.filter(
+    (item) => submissionAgeTone(item.created_at) === "crit"
+  ).length;
   return (
     <section className="space-y-3">
       <div className="flex items-center justify-between">
@@ -1098,6 +1810,18 @@ function SubmissionSection({
         </h3>
         <div className="flex flex-wrap items-center gap-2 text-xs text-[var(--muted)]">
           <span>{items.length}</span>
+          {oldest ? (
+            <span className="rounded-full border border-[var(--stroke)] px-2 py-1 text-[10px] uppercase tracking-[0.2em] text-[var(--muted)]">
+              Älteste: {formatAge(oldest)}
+            </span>
+          ) : null}
+          {tone === "pending" && (warnCount || critCount) ? (
+            <span className="rounded-full border border-[var(--stroke)] px-2 py-1 text-[10px] uppercase tracking-[0.2em] text-[var(--muted)]">
+              SLA:{" "}
+              <span className="text-[var(--accent-warm)]">{warnCount} warn</span>{" "}
+              · <span className="text-[var(--danger)]">{critCount} krit</span>
+            </span>
+          ) : null}
           {items.length ? (
             <>
               <button
@@ -1141,18 +1865,42 @@ function SubmissionSection({
                     {submission.version} · {submission.platform} ·{" "}
                     {submission.channel}
                   </p>
+                  {submission.created_at ? (
+                    <p className="mt-1 text-xs text-[var(--muted)]">
+                      Eingereicht:{" "}
+                      <span className="text-[var(--ink)]">
+                        {formatTimestamp(submission.created_at)}
+                      </span>{" "}
+                      · vor {formatAge(submission.created_at)}
+                    </p>
+                  ) : null}
                 </div>
-                <span
-                  className={`rounded-full px-3 py-1 text-xs uppercase tracking-[0.2em] ${
-                    tone === "pending"
-                      ? "bg-[rgba(128,240,184,0.15)] text-[var(--accent)]"
-                      : tone === "approved"
-                      ? "bg-[rgba(90,212,255,0.15)] text-[var(--accent-2)]"
-                      : "bg-[rgba(255,107,107,0.15)] text-[var(--danger)]"
-                  }`}
-                >
-                  {submission.status}
-                </span>
+                <div className="flex flex-wrap items-center gap-2">
+                  {tone === "pending" && submission.created_at ? (
+                    <span
+                      className={`rounded-full px-3 py-1 text-[10px] uppercase tracking-[0.2em] ${
+                        submissionAgeTone(submission.created_at) === "crit"
+                          ? "bg-[rgba(255,107,107,0.15)] text-[var(--danger)]"
+                          : submissionAgeTone(submission.created_at) === "warn"
+                          ? "bg-[rgba(240,198,107,0.2)] text-[var(--accent-warm)]"
+                          : "border border-[var(--stroke)] text-[var(--muted)]"
+                      }`}
+                    >
+                      SLA {formatAge(submission.created_at)}
+                    </span>
+                  ) : null}
+                  <span
+                    className={`rounded-full px-3 py-1 text-xs uppercase tracking-[0.2em] ${
+                      tone === "pending"
+                        ? "bg-[rgba(128,240,184,0.15)] text-[var(--accent)]"
+                        : tone === "approved"
+                        ? "bg-[rgba(90,212,255,0.15)] text-[var(--accent-2)]"
+                        : "bg-[rgba(255,107,107,0.15)] text-[var(--danger)]"
+                    }`}
+                  >
+                    {submission.status}
+                  </span>
+                </div>
               </div>
               <div className="mt-4 flex flex-wrap items-center gap-2">
                 <label className="flex items-center gap-2 text-xs text-[var(--muted)]">
@@ -1169,6 +1917,40 @@ function SubmissionSection({
                   className="rounded-full border border-[var(--stroke)] px-3 py-1 text-xs text-[var(--muted)] hover:border-[var(--accent)]"
                 >
                   Manifest
+                </button>
+                <button
+                  onClick={() => onFiles(submission)}
+                  className="rounded-full border border-[var(--stroke)] px-3 py-1 text-xs text-[var(--muted)] hover:border-[var(--accent)]"
+                >
+                  Dateien
+                </button>
+                <button
+                  onClick={() => onDownloadZip(submission)}
+                  className="rounded-full border border-[var(--stroke)] px-3 py-1 text-xs text-[var(--muted)] hover:border-[var(--accent)]"
+                >
+                  Download ZIP
+                </button>
+                <button
+                  onClick={() => navigator.clipboard.writeText(submission.app_slug)}
+                  className="rounded-full border border-[var(--stroke)] px-3 py-1 text-xs text-[var(--muted)] hover:border-[var(--accent)]"
+                >
+                  Copy Slug
+                </button>
+                <button
+                  onClick={() =>
+                    navigator.clipboard.writeText(
+                      `${submission.app_slug}@${submission.version} (${submission.platform}/${submission.channel})`
+                    )
+                  }
+                  className="rounded-full border border-[var(--stroke)] px-3 py-1 text-xs text-[var(--muted)] hover:border-[var(--accent)]"
+                >
+                  Copy Summary
+                </button>
+                <button
+                  onClick={() => navigator.clipboard.writeText(submission.version)}
+                  className="rounded-full border border-[var(--stroke)] px-3 py-1 text-xs text-[var(--muted)] hover:border-[var(--accent)]"
+                >
+                  Copy Version
                 </button>
                 {submission.note ? (
                   <span className="rounded-full border border-[var(--stroke)] bg-[var(--bg-soft)] px-3 py-1 text-xs text-[var(--muted)]">
@@ -1260,9 +2042,65 @@ function Modal({
   );
 }
 
+function formatCurrency(value: number) {
+  return new Intl.NumberFormat("de-DE", {
+    style: "currency",
+    currency: "EUR",
+    minimumFractionDigits: 2,
+  }).format(value || 0);
+}
+
+function formatTimestamp(ts?: string | null) {
+  if (!ts) return "—";
+  const parsed = new Date(ts);
+  if (Number.isNaN(parsed.getTime())) return ts;
+  return parsed.toLocaleString("de-DE", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+function formatAge(ts?: string | null) {
+  if (!ts) return "—";
+  const parsed = new Date(ts);
+  const time = parsed.getTime();
+  if (Number.isNaN(time)) return "—";
+  const diff = Date.now() - time;
+  if (diff < 0) return "—";
+  const minutes = Math.floor(diff / 60000);
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 48) return `${hours}h`;
+  const days = Math.floor(hours / 24);
+  if (days < 30) return `${days}d`;
+  const months = Math.floor(days / 30);
+  if (months < 12) return `${months}mo`;
+  const years = Math.floor(months / 12);
+  return `${years}y`;
+}
+
+function submissionAgeTone(ts?: string | null) {
+  if (!ts) return "ok";
+  const parsed = new Date(ts);
+  const time = parsed.getTime();
+  if (Number.isNaN(time)) return "ok";
+  const diffHours = (Date.now() - time) / 3600000;
+  if (diffHours >= 72) return "crit";
+  if (diffHours >= 24) return "warn";
+  return "ok";
+}
+
 function formatBytes(bytes?: number) {
   if (!bytes) return "0 B";
   const sizes = ["B", "KB", "MB", "GB"];
   const i = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), sizes.length - 1);
   return `${(bytes / Math.pow(1024, i)).toFixed(1)} ${sizes[i]}`;
+}
+
+function shortHash(hash: string) {
+  if (hash.length <= 12) return hash;
+  return `${hash.slice(0, 8)}…${hash.slice(-4)}`;
 }
