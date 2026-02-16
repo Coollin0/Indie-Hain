@@ -279,6 +279,80 @@ def admin_grant_dev_upgrade(
     }
 
 
+@admin.get("/dev-upgrade-payments")
+def admin_list_dev_upgrade_payments(
+    user_id: int | None = None,
+    provider: str | None = None,
+    consumed: bool | None = None,
+    limit: int = 100,
+    user=Depends(require_admin),
+):
+    safe_limit = max(1, min(500, int(limit)))
+    where: list[str] = []
+    params: list[object] = []
+
+    if user_id is not None:
+        where.append("p.user_id = ?")
+        params.append(int(user_id))
+    if provider:
+        where.append("LOWER(p.provider) = ?")
+        params.append(str(provider).strip().lower())
+    if consumed is True:
+        where.append("p.consumed_at IS NOT NULL")
+    elif consumed is False:
+        where.append("p.consumed_at IS NULL")
+
+    where_sql = f"WHERE {' AND '.join(where)}" if where else ""
+    query = f"""
+        SELECT
+            p.id, p.user_id, p.amount, p.currency, p.provider, p.payment_ref, p.note,
+            p.created_at, p.paid_at, p.consumed_at, p.consumed_by_user_id,
+            u.email AS user_email, u.username AS user_username, u.role AS user_role
+        FROM dev_upgrade_payments p
+        LEFT JOIN users u ON u.id = p.user_id
+        {where_sql}
+        ORDER BY p.paid_at DESC, p.id DESC
+        LIMIT ?
+    """
+    params.append(safe_limit)
+
+    with get_db() as db:
+        rows = db.execute(query, tuple(params)).fetchall()
+
+    items = []
+    for r in rows:
+        items.append(
+            {
+                "id": int(r["id"]),
+                "user_id": int(r["user_id"]),
+                "user_email": r["user_email"] or "",
+                "user_username": r["user_username"] or "",
+                "user_role": (r["user_role"] or "user").lower(),
+                "amount": float(r["amount"] or 0),
+                "currency": (r["currency"] or "EUR").upper(),
+                "provider": r["provider"] or "",
+                "payment_ref": r["payment_ref"] or "",
+                "note": r["note"] or "",
+                "created_at": r["created_at"],
+                "paid_at": r["paid_at"],
+                "consumed_at": r["consumed_at"],
+                "consumed_by_user_id": r["consumed_by_user_id"],
+                "is_consumed": bool(r["consumed_at"]),
+            }
+        )
+
+    return {
+        "items": items,
+        "count": len(items),
+        "limit": safe_limit,
+        "filters": {
+            "user_id": user_id,
+            "provider": provider,
+            "consumed": consumed,
+        },
+    }
+
+
 @admin.get("/overview")
 def admin_overview(user=Depends(require_admin)):
     since_30d = (datetime.utcnow() - timedelta(days=30)).isoformat()
@@ -307,10 +381,28 @@ def admin_overview(user=Depends(require_admin)):
             "SELECT COUNT(*) AS c, COALESCE(SUM(price), 0) AS total FROM purchases WHERE purchased_at >= ?",
             (since_30d,),
         ).fetchone()
+        dev_upgrade_total = db.execute(
+            "SELECT COUNT(*) AS c, COALESCE(SUM(amount), 0) AS total FROM dev_upgrade_payments"
+        ).fetchone()
+        dev_upgrade_consumed = db.execute(
+            "SELECT COUNT(*) AS c, COALESCE(SUM(amount), 0) AS total FROM dev_upgrade_payments WHERE consumed_at IS NOT NULL"
+        ).fetchone()
+        dev_upgrade_open = db.execute(
+            "SELECT COUNT(*) AS c, COALESCE(SUM(amount), 0) AS total FROM dev_upgrade_payments WHERE consumed_at IS NULL"
+        ).fetchone()
+        dev_upgrade_providers = db.execute(
+            "SELECT provider, COUNT(*) AS c FROM dev_upgrade_payments GROUP BY provider"
+        ).fetchall()
+        provider_counts = {
+            (r["provider"] or "unknown").lower(): int(r["c"]) for r in dev_upgrade_providers
+        }
 
         last_user = db.execute("SELECT MAX(created_at) AS ts FROM users").fetchone()["ts"]
         last_submission = db.execute("SELECT MAX(created_at) AS ts FROM submissions").fetchone()["ts"]
         last_purchase = db.execute("SELECT MAX(purchased_at) AS ts FROM purchases").fetchone()["ts"]
+        last_dev_upgrade = db.execute(
+            "SELECT MAX(paid_at) AS ts FROM dev_upgrade_payments"
+        ).fetchone()["ts"]
 
     return {
         "users": {
@@ -336,10 +428,20 @@ def admin_overview(user=Depends(require_admin)):
             "count_30d": purchases_30d["c"],
             "revenue_30d": float(purchases_30d["total"] or 0),
         },
+        "dev_upgrade_payments": {
+            "total": int(dev_upgrade_total["c"] or 0),
+            "open": int(dev_upgrade_open["c"] or 0),
+            "consumed": int(dev_upgrade_consumed["c"] or 0),
+            "amount_total": float(dev_upgrade_total["total"] or 0),
+            "amount_open": float(dev_upgrade_open["total"] or 0),
+            "amount_consumed": float(dev_upgrade_consumed["total"] or 0),
+            "provider_counts": provider_counts,
+        },
         "last_activity": {
             "user": last_user,
             "submission": last_submission,
             "purchase": last_purchase,
+            "dev_upgrade_payment": last_dev_upgrade,
         },
         "since_30d": since_30d,
     }

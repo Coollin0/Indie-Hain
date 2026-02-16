@@ -58,3 +58,25 @@ def grant_dev_upgrade(user_id: int, note: str | None = None):
     )
     r.raise_for_status()
     return r.json().get("user")
+
+
+def list_dev_upgrade_payments(
+    limit: int = 100,
+    user_id: int | None = None,
+    provider: str | None = None,
+    consumed: bool | None = None,
+):
+    params: dict[str, object] = {"limit": int(limit)}
+    if user_id is not None:
+        params["user_id"] = int(user_id)
+    if provider:
+        params["provider"] = str(provider)
+    if consumed is not None:
+        params["consumed"] = bool(consumed)
+    r = requests.get(
+        f"{API}/api/admin/dev-upgrade-payments",
+        headers=_hdrs(),
+        params=params,
+    )
+    r.raise_for_status()
+    return r.json().get("items") or []
