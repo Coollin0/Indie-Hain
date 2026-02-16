@@ -245,46 +245,6 @@ class AuthService:
         data = r.json()
         return self._user_from_payload(data.get("user", {}))
 
-    def admin_grant_dev_upgrade(self, user_id: int, note: str | None = None) -> User:
-        if not self._ensure_access():
-            raise RuntimeError("Not authenticated")
-        payload = {"note": note} if note else {}
-        r = requests.post(
-            f"{self.base_url}/api/admin/users/{int(user_id)}/dev-upgrade/grant",
-            headers=self._auth_headers(),
-            json=payload,
-            timeout=20,
-        )
-        r.raise_for_status()
-        data = r.json()
-        return self._user_from_payload(data.get("user", {}))
-
-    def list_users(self) -> list[User]:
-        if not self._ensure_access():
-            raise RuntimeError("Not authenticated")
-        r = requests.get(
-            f"{self.base_url}/api/admin/users",
-            headers=self._auth_headers(),
-            timeout=20,
-        )
-        r.raise_for_status()
-        data = r.json()
-        items = data.get("items") or []
-        return [self._user_from_payload(item) for item in items]
-
-    def set_role(self, user_id: int, role: str) -> User:
-        if not self._ensure_access():
-            raise RuntimeError("Not authenticated")
-        r = requests.post(
-            f"{self.base_url}/api/admin/users/{int(user_id)}/role",
-            headers=self._auth_headers(),
-            json={"role": role},
-            timeout=20,
-        )
-        r.raise_for_status()
-        data = r.json()
-        return self._user_from_payload(data.get("user", {}))
-
     def logout(self) -> None:
         if not self._access_token and not self._refresh_token:
             return

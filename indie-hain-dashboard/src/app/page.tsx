@@ -83,8 +83,40 @@ type Overview = {
     count_30d: number;
     revenue_30d: number;
   };
-  last_activity: { user?: string | null; submission?: string | null; purchase?: string | null };
+  dev_upgrade_payments?: {
+    total: number;
+    open: number;
+    consumed: number;
+    amount_total: number;
+    amount_open: number;
+    amount_consumed: number;
+    provider_counts?: Record<string, number>;
+  };
+  last_activity: {
+    user?: string | null;
+    submission?: string | null;
+    purchase?: string | null;
+    dev_upgrade_payment?: string | null;
+  };
   since_30d: string;
+};
+
+type DevUpgradePayment = {
+  id: number;
+  user_id: number;
+  user_email?: string;
+  user_username?: string;
+  user_role?: string;
+  amount: number;
+  currency: string;
+  provider: string;
+  payment_ref?: string;
+  note?: string;
+  created_at?: string;
+  paid_at?: string;
+  consumed_at?: string | null;
+  consumed_by_user_id?: number | null;
+  is_consumed?: boolean;
 };
 
 const TOKEN_KEY = "indie-hain-access";
@@ -132,7 +164,7 @@ async function apiFetch(
 }
 
 export default function Home() {
-  const [tab, setTab] = useState<"users" | "submissions" | "games">("users");
+  const [tab, setTab] = useState<"users" | "submissions" | "games" | "dev_upgrades">("users");
   const [accessToken, setAccessToken] = useState<string | null>(null);
   const [refreshToken, setRefreshToken] = useState<string | null>(null);
   const [me, setMe] = useState<User | null>(null);
@@ -145,6 +177,7 @@ export default function Home() {
   const [users, setUsers] = useState<User[]>([]);
   const [submissions, setSubmissions] = useState<Submission[]>([]);
   const [games, setGames] = useState<Game[]>([]);
+  const [devUpgrades, setDevUpgrades] = useState<DevUpgradePayment[]>([]);
   const [manifest, setManifest] = useState<Manifest | null>(null);
   const [filesPanel, setFilesPanel] = useState<{
     submission: Submission;
@@ -231,11 +264,12 @@ export default function Home() {
     setLoading(true);
     setError(null);
     try {
-      const [usersRes, subsRes, gamesRes, overviewRes] = await Promise.all([
+      const [usersRes, subsRes, gamesRes, overviewRes, devUpgradesRes] = await Promise.all([
         apiFetch("/api/admin/users", { method: "GET" }),
         apiFetch("/api/admin/submissions", { method: "GET" }),
         fetch(`${API_BASE}/api/public/apps`),
         apiFetch("/api/admin/overview", { method: "GET" }),
+        apiFetch("/api/admin/dev-upgrade-payments?limit=250", { method: "GET" }),
       ]);
 
       if (!usersRes.ok) throw new Error("User-Liste konnte nicht geladen werden.");
@@ -249,11 +283,17 @@ export default function Home() {
       if (overviewRes.ok) {
         overviewData = await overviewRes.json();
       }
+      let devUpgradeData: DevUpgradePayment[] = [];
+      if (devUpgradesRes.ok) {
+        const payload = await devUpgradesRes.json();
+        devUpgradeData = payload.items || [];
+      }
 
       setUsers(usersData.items || []);
       setSubmissions(subsData.items || []);
       setGames(gamesData || []);
       setOverview(overviewData);
+      setDevUpgrades(devUpgradeData);
       setSelectedSubmissionIds([]);
       setManifest(null);
       setFilesPanel(null);
@@ -672,6 +712,11 @@ export default function Home() {
         value: `${overview.users.total}`,
         meta: `${overview.users.users} User`,
       },
+      {
+        label: "Dev-Upgrades",
+        value: `${overview.dev_upgrade_payments?.total ?? 0}`,
+        meta: `${formatCurrency(overview.dev_upgrade_payments?.amount_total ?? 0)} Gesamt`,
+      },
     ];
   }, [overview]);
 
@@ -927,7 +972,7 @@ export default function Home() {
                     </div>
                   ))}
                 </div>
-                <div className="mt-4 grid gap-3 text-xs text-[var(--muted)] md:grid-cols-3">
+                <div className="mt-4 grid gap-3 text-xs text-[var(--muted)] md:grid-cols-4">
                   <div className="rounded-2xl border border-[var(--stroke)] bg-[var(--bg-soft)] px-4 py-3">
                     <p className="uppercase tracking-[0.2em]">Letzter User</p>
                     <p className="mt-2 text-sm text-[var(--ink)]">
@@ -946,6 +991,12 @@ export default function Home() {
                       {formatTimestamp(overview.last_activity?.purchase)}
                     </p>
                   </div>
+                  <div className="rounded-2xl border border-[var(--stroke)] bg-[var(--bg-soft)] px-4 py-3">
+                    <p className="uppercase tracking-[0.2em]">Letzter Dev-Upgrade</p>
+                    <p className="mt-2 text-sm text-[var(--ink)]">
+                      {formatTimestamp(overview.last_activity?.dev_upgrade_payment)}
+                    </p>
+                  </div>
                 </div>
               </section>
             ) : null}
@@ -953,7 +1004,7 @@ export default function Home() {
             <section className="card rounded-3xl p-6">
               <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--stroke)] pb-4">
                 <div className="flex items-center gap-2">
-                  {(["users", "submissions", "games"] as const).map((key) => (
+                  {(["users", "submissions", "games", "dev_upgrades"] as const).map((key) => (
                     <button
                       key={key}
                       onClick={() => setTab(key)}
@@ -967,7 +1018,9 @@ export default function Home() {
                         ? "User"
                         : key === "submissions"
                         ? "Game Anfragen"
-                        : "Games"}
+                        : key === "games"
+                        ? "Games"
+                        : "Dev-Upgrades"}
                     </button>
                   ))}
                 </div>
@@ -1297,6 +1350,38 @@ export default function Home() {
                     </div>
                   </div>
                   <GamesTable games={filteredGames} />
+                </>
+              ) : null}
+
+              {tab === "dev_upgrades" ? (
+                <>
+                  <div className="mt-5 grid gap-3 md:grid-cols-4">
+                    <div className="rounded-2xl border border-[var(--stroke)] bg-[var(--bg-soft)] px-4 py-3 text-sm text-[var(--muted)]">
+                      <p className="uppercase tracking-[0.2em]">Einträge</p>
+                      <p className="mt-2 text-xl text-[var(--ink)]">
+                        {overview?.dev_upgrade_payments?.total ?? devUpgrades.length}
+                      </p>
+                    </div>
+                    <div className="rounded-2xl border border-[var(--stroke)] bg-[var(--bg-soft)] px-4 py-3 text-sm text-[var(--muted)]">
+                      <p className="uppercase tracking-[0.2em]">Offen</p>
+                      <p className="mt-2 text-xl text-[var(--ink)]">
+                        {overview?.dev_upgrade_payments?.open ?? 0}
+                      </p>
+                    </div>
+                    <div className="rounded-2xl border border-[var(--stroke)] bg-[var(--bg-soft)] px-4 py-3 text-sm text-[var(--muted)]">
+                      <p className="uppercase tracking-[0.2em]">Verbraucht</p>
+                      <p className="mt-2 text-xl text-[var(--ink)]">
+                        {overview?.dev_upgrade_payments?.consumed ?? 0}
+                      </p>
+                    </div>
+                    <div className="rounded-2xl border border-[var(--stroke)] bg-[var(--bg-soft)] px-4 py-3 text-sm text-[var(--muted)]">
+                      <p className="uppercase tracking-[0.2em]">Betrag gesamt</p>
+                      <p className="mt-2 text-xl text-[var(--ink)]">
+                        {formatCurrency(overview?.dev_upgrade_payments?.amount_total ?? 0)}
+                      </p>
+                    </div>
+                  </div>
+                  <DevUpgradePaymentsTable payments={devUpgrades} />
                 </>
               ) : null}
             </section>
@@ -1674,6 +1759,60 @@ function UsersTable({
                     Löschen
                   </button>
                 </div>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function DevUpgradePaymentsTable({ payments }: { payments: DevUpgradePayment[] }) {
+  if (!payments.length) {
+    return <p className="mt-6 text-sm text-[var(--muted)]">Keine Dev-Upgrade Einträge gefunden.</p>;
+  }
+  return (
+    <div className="mt-6 overflow-x-auto">
+      <table className="w-full text-left text-sm">
+        <thead className="text-xs uppercase tracking-[0.2em] text-[var(--muted)]">
+          <tr>
+            <th className="pb-3">ID</th>
+            <th className="pb-3">User</th>
+            <th className="pb-3">E-Mail</th>
+            <th className="pb-3">Provider</th>
+            <th className="pb-3">Betrag</th>
+            <th className="pb-3">Status</th>
+            <th className="pb-3">Bezahlt</th>
+            <th className="pb-3">Verbraucht</th>
+            <th className="pb-3">Ref</th>
+          </tr>
+        </thead>
+        <tbody className="text-[var(--ink)]">
+          {payments.map((payment) => (
+            <tr key={payment.id} className="border-t border-[var(--stroke)]">
+              <td className="py-3">{payment.id}</td>
+              <td className="py-3">{payment.user_id}</td>
+              <td className="py-3">{payment.user_email || "-"}</td>
+              <td className="py-3">{payment.provider || "-"}</td>
+              <td className="py-3">
+                {Number(payment.amount || 0).toFixed(2)} {payment.currency || "EUR"}
+              </td>
+              <td className="py-3">
+                {payment.is_consumed || payment.consumed_at ? (
+                  <span className="rounded-full border border-[var(--stroke)] bg-[var(--bg-soft)] px-2 py-1 text-xs text-[var(--accent)]">
+                    consumed
+                  </span>
+                ) : (
+                  <span className="rounded-full border border-[var(--stroke)] bg-[var(--bg-soft)] px-2 py-1 text-xs text-[var(--accent-warm)]">
+                    open
+                  </span>
+                )}
+              </td>
+              <td className="py-3">{formatTimestamp(payment.paid_at)}</td>
+              <td className="py-3">{formatTimestamp(payment.consumed_at || null)}</td>
+              <td className="py-3">
+                <span className="font-mono text-xs">{payment.payment_ref || "-"}</span>
               </td>
             </tr>
           ))}
