@@ -57,6 +57,10 @@ class AdminRoleUpdate(BaseModel):
     role: str
 
 
+class AdminDevUpgradeGrant(BaseModel):
+    note: Optional[str] = None
+
+
 class AdminPasswordReset(BaseModel):
     password: Optional[str] = None
 

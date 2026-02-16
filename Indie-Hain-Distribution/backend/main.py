@@ -4,9 +4,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from typing import Iterator, Optional
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from datetime import datetime, timedelta
-import hashlib, json, io, zipfile, tempfile, os, re
+import hashlib, json, io, zipfile, tempfile, os, re, secrets
 
 from .auth import (
     require_dev,
@@ -40,6 +40,7 @@ from .models import (
     AuthRefresh,
     AuthLogout,
     AdminRoleUpdate,
+    AdminDevUpgradeGrant,
 )
 from pathlib import Path as _Path
 
@@ -64,6 +65,11 @@ app.mount(
     StaticFiles(directory=str(_Path(__file__).resolve().parent / "static")),
     name="static",
 )
+
+DEV_UPGRADE_PRICE_EUR = float(os.environ.get("DEV_UPGRADE_PRICE_EUR", "20"))
+PAYMENT_MODE = (os.environ.get("PAYMENT_MODE", "test") or "test").strip().lower()
+if PAYMENT_MODE not in {"test", "live"}:
+    PAYMENT_MODE = "test"
 
 # Router für Admin & Public APIs
 admin = APIRouter(prefix="/api/admin", tags=["admin"])
@@ -124,8 +130,44 @@ def auth_profile(payload: AuthProfileUpdate, user: dict = Depends(require_user))
 
 @app.post("/api/auth/upgrade/dev")
 def auth_upgrade_dev(user: dict = Depends(require_user)):
-    updated = set_role_by_id(user["user_id"], "dev", revoke_sessions=False)
-    return {"user": updated}
+    current_role = str(user.get("role") or "user").lower()
+    if current_role in ("dev", "admin"):
+        return {
+            "user": {
+                "id": int(user["user_id"]),
+                "email": user.get("email", ""),
+                "role": current_role,
+                "username": user.get("username", ""),
+                "avatar_url": user.get("avatar_url", ""),
+            },
+            "upgrade": {"status": "already_enabled", "mode": PAYMENT_MODE},
+        }
+
+    user_id = int(user["user_id"])
+    payment = _find_open_dev_upgrade_payment(user_id)
+    if not payment:
+        if PAYMENT_MODE == "test":
+            payment_id = _create_dev_upgrade_payment(
+                user_id=user_id,
+                provider="stripe_test",
+                payment_ref=f"test_{secrets.token_hex(8)}",
+                note="auto test payment",
+            )
+            payment = {"id": payment_id, "provider": "stripe_test"}
+        else:
+            raise HTTPException(402, "DEV_UPGRADE_PAYMENT_REQUIRED")
+
+    _consume_dev_upgrade_payment(int(payment["id"]), user_id)
+    updated = set_role_by_id(user_id, "dev", revoke_sessions=False)
+    return {
+        "user": updated,
+        "upgrade": {
+            "status": "enabled",
+            "mode": PAYMENT_MODE,
+            "payment_id": int(payment["id"]),
+            "provider": str(payment.get("provider") or ""),
+        },
+    }
 
 
 @app.post("/api/auth/logout")
@@ -200,6 +242,41 @@ def admin_set_role(user_id: int, payload: AdminRoleUpdate, user=Depends(require_
         raise HTTPException(400, "invalid role")
     updated = set_role_by_id(user_id, role, revoke_sessions=True)
     return {"user": updated}
+
+
+@admin.post("/users/{user_id}/dev-upgrade/grant")
+def admin_grant_dev_upgrade(
+    user_id: int,
+    payload: AdminDevUpgradeGrant | None = Body(default=None),
+    user=Depends(require_admin),
+):
+    current_role = _get_user_role(user_id)
+    if current_role is None:
+        raise HTTPException(404, "user not found")
+    if current_role == "admin":
+        raise HTTPException(400, "target user is already admin")
+    if current_role == "dev":
+        updated = set_role_by_id(user_id, "dev", revoke_sessions=False)
+        return {"user": updated, "grant": {"status": "already_dev"}}
+
+    note = payload.note if payload else None
+    payment_id = _create_dev_upgrade_payment(
+        user_id=int(user_id),
+        provider="admin_grant",
+        amount=0.0,
+        payment_ref=f"grant_{secrets.token_hex(8)}",
+        note=note or f"Granted by admin #{int(user['user_id'])}",
+    )
+    _consume_dev_upgrade_payment(payment_id, int(user["user_id"]))
+    updated = set_role_by_id(user_id, "dev", revoke_sessions=True)
+    return {
+        "user": updated,
+        "grant": {
+            "status": "granted",
+            "payment_id": payment_id,
+            "granted_by_user_id": int(user["user_id"]),
+        },
+    }
 
 
 @admin.get("/overview")
@@ -287,6 +364,7 @@ def _read_chunk_bytes(hash_hex: str) -> bytes:
 
 SLUG_RE = re.compile(r"^[a-z0-9-]{1,64}$")
 COMP_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
+SHA256_RE = re.compile(r"^[a-f0-9]{64}$")
 
 
 def _require_safe_slug(slug: str) -> str:
@@ -301,12 +379,242 @@ def _require_safe_comp(value: str, field: str) -> str:
     return value
 
 
+def _require_sha256(value: str) -> str:
+    if not SHA256_RE.match(value or ""):
+        raise HTTPException(400, "Invalid sha256")
+    return value
+
+
+def _normalize_manifest_file_path(path: str) -> str:
+    raw = (path or "").strip().replace("\\", "/")
+    if not raw or raw.startswith("/"):
+        raise HTTPException(400, "Invalid file path")
+    pure = PurePosixPath(raw)
+    parts = pure.parts
+    if not parts:
+        raise HTTPException(400, "Invalid file path")
+    if any(part in ("", ".", "..") for part in parts):
+        raise HTTPException(400, "Invalid file path")
+    if ":" in parts[0]:
+        raise HTTPException(400, "Invalid file path")
+    normalized = "/".join(parts)
+    if not normalized:
+        raise HTTPException(400, "Invalid file path")
+    return normalized
+
+
+def _validate_manifest_files(manifest: Manifest) -> None:
+    seen_paths: set[str] = set()
+    total_size = 0
+    for entry in manifest.files:
+        normalized_path = _normalize_manifest_file_path(entry.path)
+        if normalized_path in seen_paths:
+            raise HTTPException(400, "Duplicate file path")
+        seen_paths.add(normalized_path)
+        entry.path = normalized_path
+
+        _require_sha256(entry.sha256)
+        expected_offset = 0
+        for ch in entry.chunks:
+            _require_sha256(ch.sha256)
+            if int(ch.size) < 0:
+                raise HTTPException(400, "Invalid chunk size")
+            if int(ch.offset) != expected_offset:
+                raise HTTPException(400, "Invalid chunk offsets")
+            expected_offset += int(ch.size)
+        if int(entry.size) != expected_offset:
+            raise HTTPException(400, "File size mismatch")
+        total_size += int(entry.size)
+
+    if int(manifest.total_size) != total_size:
+        raise HTTPException(400, "Manifest total_size mismatch")
+
+
 def _safe_resolve(base: Path, rel: Path) -> Path:
     base_resolved = base.resolve()
     target = (base / rel).resolve()
     if not target.is_relative_to(base_resolved):
         raise HTTPException(403, "Invalid path")
     return target
+
+
+def _effective_price(price: float, sale_percent: float) -> float:
+    base = max(0.0, float(price or 0.0))
+    sale = min(100.0, max(0.0, float(sale_percent or 0.0)))
+    return round(base * (100.0 - sale) / 100.0, 2)
+
+
+def _create_dev_upgrade_payment(
+    *,
+    user_id: int,
+    provider: str,
+    amount: float = DEV_UPGRADE_PRICE_EUR,
+    currency: str = "EUR",
+    note: str | None = None,
+    payment_ref: str | None = None,
+) -> int:
+    now_iso = datetime.utcnow().isoformat()
+    with get_db() as db:
+        db.execute(
+            """
+            INSERT INTO dev_upgrade_payments(
+                user_id, amount, currency, provider, payment_ref, note, created_at, paid_at
+            )
+            VALUES(?,?,?,?,?,?,?,?)
+            """,
+            (
+                int(user_id),
+                float(amount),
+                str(currency or "EUR").upper(),
+                provider,
+                payment_ref,
+                note,
+                now_iso,
+                now_iso,
+            ),
+        )
+        db.commit()
+        row = db.execute("SELECT last_insert_rowid() AS id").fetchone()
+    return int(row["id"])
+
+
+def _find_open_dev_upgrade_payment(user_id: int) -> dict | None:
+    with get_db() as db:
+        row = db.execute(
+            """
+            SELECT id, user_id, amount, currency, provider, payment_ref, note, paid_at
+            FROM dev_upgrade_payments
+            WHERE user_id=? AND consumed_at IS NULL
+            ORDER BY paid_at DESC, id DESC
+            LIMIT 1
+            """,
+            (int(user_id),),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def _consume_dev_upgrade_payment(payment_id: int, consumed_by_user_id: int) -> None:
+    now_iso = datetime.utcnow().isoformat()
+    with get_db() as db:
+        cur = db.execute(
+            """
+            UPDATE dev_upgrade_payments
+            SET consumed_at=?, consumed_by_user_id=?
+            WHERE id=? AND consumed_at IS NULL
+            """,
+            (now_iso, int(consumed_by_user_id), int(payment_id)),
+        )
+        db.commit()
+    if cur.rowcount != 1:
+        raise HTTPException(409, "Upgrade payment already consumed")
+
+
+def _get_user_role(user_id: int) -> str | None:
+    with get_db() as db:
+        row = db.execute(
+            "SELECT role FROM users WHERE id=?",
+            (int(user_id),),
+        ).fetchone()
+    if not row:
+        return None
+    return str(row["role"] or "user").lower()
+
+
+def _latest_ready_manifest_rel(slug: str, platform: str, channel: str) -> str:
+    _require_safe_slug(slug)
+    _require_safe_comp(platform, "platform")
+    _require_safe_comp(channel, "channel")
+    with get_db() as db:
+        row = db.execute(
+            """
+            SELECT b.manifest_url
+            FROM builds b
+            JOIN apps a ON a.id=b.app_id
+            WHERE a.slug=? AND b.platform=? AND b.channel=? AND b.status='ready'
+            ORDER BY b.id DESC LIMIT 1
+            """,
+            (slug, platform, channel),
+        ).fetchone()
+    if not row or not row["manifest_url"]:
+        raise HTTPException(404, "No manifest")
+    return str(row["manifest_url"])
+
+
+def _manifest_rel_for_build(slug: str, version: str, platform: str, channel: str) -> str:
+    _require_safe_slug(slug)
+    _require_safe_comp(version, "version")
+    _require_safe_comp(platform, "platform")
+    _require_safe_comp(channel, "channel")
+    with get_db() as db:
+        row = db.execute(
+            """
+            SELECT b.manifest_url
+            FROM builds b
+            JOIN apps a ON a.id=b.app_id
+            WHERE a.slug=? AND b.version=? AND b.platform=? AND b.channel=? AND b.status='ready'
+            ORDER BY b.id DESC LIMIT 1
+            """,
+            (slug, version, platform, channel),
+        ).fetchone()
+    if not row or not row["manifest_url"]:
+        raise HTTPException(404, "No manifest for build")
+    return str(row["manifest_url"])
+
+
+def _load_ready_manifest(
+    slug: str,
+    platform: str,
+    channel: str,
+    version: str | None = None,
+) -> tuple[dict, str]:
+    if version:
+        manifest_rel = _manifest_rel_for_build(slug, version, platform, channel)
+    else:
+        manifest_rel = _latest_ready_manifest_rel(slug, platform, channel)
+    manifest_path = _safe_resolve(STORAGE_APPS.parent, Path(manifest_rel))
+    if not manifest_path.exists():
+        raise HTTPException(404, "Manifest missing on disk")
+    try:
+        data = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        raise HTTPException(500, "Manifest invalid") from exc
+    return data, manifest_rel
+
+
+def _manifest_contains_chunk(manifest: dict, sha256: str) -> bool:
+    for file_entry in manifest.get("files", []):
+        for chunk in file_entry.get("chunks", []):
+            if str(chunk.get("sha256", "")) == sha256:
+                return True
+    return False
+
+
+def _require_download_access(slug: str, user: dict) -> dict:
+    _require_safe_slug(slug)
+    uid = int(user["user_id"])
+    role = str(user.get("role") or "user").lower()
+    with get_db() as db:
+        app_row = db.execute(
+            "SELECT id, owner_user_id, is_approved FROM apps WHERE slug=?",
+            (slug,),
+        ).fetchone()
+        if not app_row:
+            raise HTTPException(404, "App not found")
+        app_id = int(app_row["id"])
+        owner_id = int(app_row["owner_user_id"] or 0)
+        approved = int(app_row["is_approved"] or 0)
+
+        if role == "admin" or uid == owner_id:
+            return {"app_id": app_id, "owner_user_id": owner_id, "is_approved": approved}
+
+        purchase = db.execute(
+            "SELECT 1 FROM purchases WHERE app_id=? AND user_id=? LIMIT 1",
+            (app_id, uid),
+        ).fetchone()
+        if not purchase:
+            raise HTTPException(403, "Purchase required")
+
+    return {"app_id": app_id, "owner_user_id": owner_id, "is_approved": approved}
 
 
 # ===============================
@@ -362,10 +670,16 @@ def _require_build_owner(build_id: int, user_id: int) -> dict:
 async def create_app(payload: AppCreate, user: dict = Depends(require_dev)):
     _require_safe_slug(payload.slug)
     with get_db() as db:
-        db.execute(
-            "INSERT INTO apps(slug,title,owner_user_id,created_at) VALUES(?,?,?,?)",
-            (payload.slug, payload.title, user["user_id"], datetime.utcnow().isoformat()),
-        )
+        try:
+            db.execute(
+                "INSERT INTO apps(slug,title,owner_user_id,created_at) VALUES(?,?,?,?)",
+                (payload.slug, payload.title, user["user_id"], datetime.utcnow().isoformat()),
+            )
+        except Exception as exc:
+            msg = str(exc).lower()
+            if "unique" in msg or "constraint" in msg:
+                raise HTTPException(409, "slug already exists") from exc
+            raise
         db.commit()
         app_id = db.execute("SELECT last_insert_rowid() id").fetchone()["id"]
     return {"id": app_id}
@@ -490,6 +804,7 @@ async def missing_chunks(
     _require_build_owner(build_id, user["user_id"])
     missing = []
     for h in req.hashes:
+        _require_sha256(h)
         if not hex_shard(h).exists():
             missing.append(h)
     return {"missing": missing}
@@ -502,6 +817,7 @@ async def upload_chunk(
     body: bytes = Body(...),
     user: dict = Depends(require_dev),
 ):
+    hash = _require_sha256(hash)
     calc = hashlib.sha256(body).hexdigest()
     if calc != hash:
         raise HTTPException(400, "Hash mismatch")
@@ -534,6 +850,7 @@ async def finalize_build(
     _require_safe_comp(manifest.version, "version")
     _require_safe_comp(manifest.platform, "platform")
     _require_safe_comp(manifest.channel, "channel")
+    _validate_manifest_files(manifest)
     _require_build_owner(build_id, user["user_id"])
     with get_db() as db:
         b = db.execute("SELECT * FROM builds WHERE id=?", (build_id,)).fetchone()
@@ -635,21 +952,46 @@ async def report_purchase(
     user: dict = Depends(require_user),
 ):
     """Launcher meldet einen Kauf an den Distribution-Server."""
+    app_id = int(payload.app_id)
+    if app_id <= 0:
+        raise HTTPException(400, "Invalid app_id")
+
+    user_id = int(user["user_id"])
     with get_db() as db:
+        app_row = db.execute(
+            "SELECT id, is_approved, price, sale_percent FROM apps WHERE id=?",
+            (app_id,),
+        ).fetchone()
+        if not app_row:
+            raise HTTPException(404, "App not found")
+        if int(app_row["is_approved"] or 0) != 1:
+            raise HTTPException(400, "App not available")
+
+        existing = db.execute(
+            "SELECT id FROM purchases WHERE app_id=? AND user_id=? LIMIT 1",
+            (app_id, user_id),
+        ).fetchone()
+        if existing:
+            return {"ok": True, "already_reported": True}
+
+        charged_price = _effective_price(
+            float(app_row["price"] or 0.0),
+            float(app_row["sale_percent"] or 0.0),
+        )
         db.execute(
             """
             INSERT INTO purchases(app_id, user_id, price, purchased_at)
             VALUES(?,?,?,?)
             """,
             (
-                payload.app_id,
-                user["user_id"],
-                float(payload.price),
+                app_id,
+                user_id,
+                charged_price,
                 datetime.utcnow().isoformat(),
             ),
         )
         db.commit()
-    return {"ok": True}
+    return {"ok": True, "price": charged_price}
 
 
 # ===============================
@@ -664,30 +1006,26 @@ async def get_manifest(
     channel: str,
     user: dict = Depends(require_user),
 ):
-    with get_db() as db:
-        row = db.execute(
-            """
-            SELECT b.manifest_url FROM builds b
-            JOIN apps a ON a.id=b.app_id
-            WHERE a.slug=? AND b.platform=? AND b.channel=? AND b.status='ready'
-            ORDER BY b.id DESC LIMIT 1
-            """,
-            (slug, platform, channel),
-        ).fetchone()
-        if not row:
-            raise HTTPException(404, "No manifest")
-
-    manifest_path = _safe_resolve(STORAGE_APPS.parent, Path(row["manifest_url"]))
-    if not manifest_path.exists():
-        raise HTTPException(404, "Manifest missing on disk")
-
-    data = json.loads(manifest_path.read_text(encoding="utf-8"))
+    _require_download_access(slug, user)
+    data, _ = _load_ready_manifest(slug, platform, channel)
     return JSONResponse(content=data)
 
 
 # Dateien / Chunks ausliefern
 @app.get("/storage/chunks/{hash}")
-async def get_chunk(hash: str, user: dict = Depends(require_user)):
+async def get_chunk(
+    hash: str,
+    slug: str,
+    version: str,
+    platform: str,
+    channel: str,
+    user: dict = Depends(require_user),
+):
+    hash = _require_sha256(hash)
+    _require_download_access(slug, user)
+    manifest, _ = _load_ready_manifest(slug, platform, channel, version=version)
+    if not _manifest_contains_chunk(manifest, hash):
+        raise HTTPException(404, "Chunk not in manifest")
     p = STORAGE_CHUNKS / hash[0:2] / hash[2:4] / hash
     if not p.exists():
         raise HTTPException(404, "Chunk not found")
@@ -695,8 +1033,26 @@ async def get_chunk(hash: str, user: dict = Depends(require_user)):
 
 
 @app.get("/storage/apps/{path:path}")
-async def get_storage_file(path: str, user: dict = Depends(require_user)):
-    p = _safe_resolve(STORAGE_APPS, Path(path))
+async def get_storage_file(
+    path: str,
+    slug: str,
+    version: str,
+    platform: str,
+    channel: str,
+    user: dict = Depends(require_user),
+):
+    _require_download_access(slug, user)
+    _, manifest_rel = _load_ready_manifest(slug, platform, channel, version=version)
+
+    req_path = _normalize_manifest_file_path(path)
+    try:
+        expected_rel = Path(manifest_rel).relative_to("apps").as_posix()
+    except ValueError as exc:
+        raise HTTPException(500, "Manifest path layout invalid") from exc
+    if req_path != expected_rel:
+        raise HTTPException(403, "File not allowed")
+
+    p = _safe_resolve(STORAGE_APPS, Path(req_path))
     if not p.exists():
         raise HTTPException(404, "File not found")
     return FileResponse(p)

@@ -190,6 +190,31 @@ def ensure_schema():
             """
         )
 
+        # Dev-Upgrade-Zahlungen/Freischaltungen
+        db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS dev_upgrade_payments (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                amount REAL NOT NULL,
+                currency TEXT NOT NULL DEFAULT 'EUR',
+                provider TEXT NOT NULL,
+                payment_ref TEXT,
+                note TEXT,
+                created_at TEXT NOT NULL,
+                paid_at TEXT NOT NULL,
+                consumed_at TEXT,
+                consumed_by_user_id INTEGER
+            )
+            """
+        )
+        db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_dev_upgrade_user ON dev_upgrade_payments(user_id, consumed_at)"
+        )
+        db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_dev_upgrade_ref ON dev_upgrade_payments(payment_ref)"
+        )
+
         # Extra-Bilder / Screenshots pro App (für späteres UI)
         db.execute(
             """

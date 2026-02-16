@@ -47,3 +47,14 @@ def file_download_url(sid: int, path: str) -> str:
 
 def zip_download_url(sid: int) -> str:
     return f"{API}/api/admin/submissions/{sid}/files/zip"
+
+
+def grant_dev_upgrade(user_id: int, note: str | None = None):
+    payload = {"note": note} if note else {}
+    r = requests.post(
+        f"{API}/api/admin/users/{int(user_id)}/dev-upgrade/grant",
+        headers=_hdrs(),
+        json=payload,
+    )
+    r.raise_for_status()
+    return r.json().get("user")

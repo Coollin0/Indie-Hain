@@ -21,7 +21,7 @@ from services.env import (
     remove_legacy_install_dir,
     clear_legacy_install_dirs,
 )
-from auth_service import PasswordResetRequired
+from auth_service import PasswordResetRequired, DevUpgradePaymentRequired
 
 
 class ProfilePage(QWidget):
@@ -702,7 +702,21 @@ class ProfilePage(QWidget):
         if not u:
             QMessageBox.information(self, "Upgrade", "Bitte zuerst einloggen.")
             return
-        new_user = store.auth_service.upgrade_to_dev(u.id)
+        try:
+            new_user = store.auth_service.upgrade_to_dev(u.id)
+        except DevUpgradePaymentRequired:
+            QMessageBox.information(
+                self,
+                "Upgrade",
+                "Für das Dev-Upgrade ist eine Zahlung erforderlich.\n"
+                "Im Testbetrieb kannst du den Server mit PAYMENT_MODE=test starten\n"
+                "oder ein Admin gibt dich über /api/admin/users/{id}/dev-upgrade/grant frei.",
+            )
+            return
+        except Exception as exc:
+            QMessageBox.critical(self, "Upgrade", f"Fehler: {exc}")
+            return
+
         store.session.current_user = new_user
         store.save_session()
         self._sync_state()

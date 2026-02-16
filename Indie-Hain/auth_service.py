@@ -22,6 +22,10 @@ class PasswordResetRequired(Exception):
     pass
 
 
+class DevUpgradePaymentRequired(Exception):
+    pass
+
+
 class AuthService:
     def __init__(self, base_url: Optional[str] = None):
         self.base_url = (base_url or api_base()).rstrip("/")
@@ -225,6 +229,30 @@ class AuthService:
         r = requests.post(
             f"{self.base_url}/api/auth/upgrade/dev",
             headers=self._auth_headers(),
+            timeout=20,
+        )
+        if r.status_code == 402:
+            detail = ""
+            try:
+                detail = str((r.json() or {}).get("detail") or "")
+            except Exception:
+                detail = ""
+            if detail == "DEV_UPGRADE_PAYMENT_REQUIRED":
+                raise DevUpgradePaymentRequired(
+                    "Upgrade requires a successful payment or admin grant."
+                )
+        r.raise_for_status()
+        data = r.json()
+        return self._user_from_payload(data.get("user", {}))
+
+    def admin_grant_dev_upgrade(self, user_id: int, note: str | None = None) -> User:
+        if not self._ensure_access():
+            raise RuntimeError("Not authenticated")
+        payload = {"note": note} if note else {}
+        r = requests.post(
+            f"{self.base_url}/api/admin/users/{int(user_id)}/dev-upgrade/grant",
+            headers=self._auth_headers(),
+            json=payload,
             timeout=20,
         )
         r.raise_for_status()
